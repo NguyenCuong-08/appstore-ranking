@@ -1,0 +1,272 @@
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.5;
+  color: #1c1c1e;
+  background: #f5f5f7;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+.wrap {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 24px 16px 64px;
+}
+
+header h1 {
+  margin: 0 0 4px;
+  font-size: 26px;
+}
+
+.sub {
+  margin: 0 0 18px;
+  color: #6e6e73;
+  font-size: 13px;
+}
+
+.chip {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  vertical-align: middle;
+}
+
+.chip.cached {
+  background: #d9f7e8;
+  color: #0a6b3d;
+}
+
+.chip.warn {
+  background: #fff1cc;
+  color: #8a5b00;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  margin-bottom: 14px;
+}
+
+.controls label {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  color: #6e6e73;
+  gap: 4px;
+}
+
+.controls select {
+  min-width: 160px;
+  padding: 8px 10px;
+  border: 1px solid #d1d1d6;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 14px;
+}
+
+.chart-group {
+  display: flex;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid #d1d1d6;
+}
+
+.chart-btn {
+  border: none;
+  padding: 9px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  background: #fff;
+  color: #1c1c1e;
+}
+
+.chart-btn.active {
+  background: #007aff;
+  color: #fff;
+}
+
+.chart-btn + .chart-btn {
+  border-left: 1px solid #d1d1d6;
+}
+
+.refresh-btn {
+  padding: 9px 18px;
+  border: none;
+  border-radius: 8px;
+  background: #34c759;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.refresh-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.search-box {
+  position: relative;
+  margin-bottom: 12px;
+}
+
+.search-box input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #d1d1d6;
+  border-radius: 10px;
+  font-size: 14px;
+}
+
+.search-result {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 12px;
+  font-weight: 700;
+  color: #007aff;
+}
+
+.search-result.nf {
+  color: #ff3b30;
+}
+
+.error {
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #ffe5e3;
+  color: #b42318;
+  font-size: 13px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.error button {
+  margin-left: auto;
+  padding: 6px 12px;
+  border: none;
+  border-radius: 6px;
+  background: #b42318;
+  color: #fff;
+  cursor: pointer;
+}
+
+.meta-line {
+  font-size: 12px;
+  color: #6e6e73;
+  margin-bottom: 10px;
+}
+
+.ranking {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.ranking th {
+  text-align: left;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #6e6e73;
+  padding: 10px 12px;
+  background: #fafafa;
+  border-bottom: 1px solid #ececf1;
+}
+
+.ranking td {
+  padding: 8px 12px;
+  border-bottom: 1px solid #f1f1f5;
+  vertical-align: middle;
+}
+
+.ranking tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.ranking tbody tr:hover {
+  background: #f7f9ff;
+}
+
+.col-rank {
+  width: 48px;
+}
+
+.col-icon {
+  width: 56px;
+}
+
+.col-dev {
+  width: 34%;
+  color: #6e6e73;
+  font-size: 13px;
+}
+
+.rank-num {
+  font-weight: 700;
+  color: #3a3a3c;
+}
+
+tr.top-1 .rank-num { color: #ff9500; font-size: 18px; }
+tr.top-2 .rank-num { color: #8e8e93; font-size: 16px; }
+tr.top-3 .rank-num { color: #b2502a; font-size: 15px; }
+
+.ranking img {
+  border-radius: 10px;
+  display: block;
+}
+
+.no-icon {
+  display: inline-block;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: #ececf1;
+}
+
+.app-name {
+  display: flex;
+  flex-direction: column;
+}
+
+.app-name a {
+  color: #1c1c1e;
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.app-name a:hover {
+  text-decoration: underline;
+}
+
+.app-id {
+  font-size: 11px;
+  color: #a0a0a6;
+}
+
+.empty {
+  padding: 24px;
+  text-align: center;
+  color: #6e6e73;
+  background: #fff;
+  border-radius: 12px;
+  margin-top: 8px;
+}
