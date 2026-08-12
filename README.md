@@ -1,61 +1,81 @@
-# App Store Ranking Web
+# App Store Ranking — Next.js + Supabase
 
-Web xem hạng ứng dụng trên App Store theo **quốc gia**, **category** và **loại chart** (Top Free / Top Paid / Top Grossing). Dữ liệu từ feed công khai của Apple — không cần Apple Developer account, không cần API key.
+Web theo dõi thứ hạng ứng dụng trên App Store theo quốc gia & danh mục.
+Single-user, **không cần đăng ký/đăng nhập**. Data lưu trên **Supabase (Postgres)**.
+Cron **mỗi 1 giờ** tự fetch rank từ App Store và cập nhật vào DB
+(chỉ insert snapshot khi rank thay đổi để tối ưu dung lượng).
 
-## Kiến trúc
+> **Lưu ý**: Apple không public API số lượt tải. Trang chi tiết hiển thị
+> Rating (sao), số đánh giá (reviews), số nước có mặt trong Top 200, Ranking score
+> và bảng top ranking theo từng nước — là các số liệu công khai lấy được.
 
+## Tech stack
+
+- **Next.js 15** (App Router) + TypeScript + Tailwind CSS v4 + shadcn/ui
+- **Supabase**: Postgres (data + lưu trữ)
+- **Recharts** (line chart lịch sử rank)
+- **Vercel Cron** — mỗi 1h sync rank, mỗi ngày sync metadata
+
+## Cài đặt
+
+1. Cài dependencies:
+   ```bash
+   npm install
+   ```
+
+2. Tạo `.env.local` (copy từ `.env.example`):
+   ```
+   NEXT_PUBLIC_SUPABASE_URL=https://wwihzdwmrvirkqmzonsr.supabase.co
+   NEXT_PUBLIC_SUPABASE_ANON_KEY=...
+   SUPABASE_SERVICE_ROLE_KEY=...
+   CRON_SECRET=...
+   ```
+   Keys lấy từ Supabase → Project Settings → API.
+
+3. **Áp dụng schema (bắt buộc, chạy 1 lần)**: mở
+   [Supabase SQL Editor](https://supabase.com/dashboard/project/wwihzdwmrvirkqmzonsr/sql),
+   paste toàn bộ nội dung `supabase/schema.sql`, bấm **Run**.
+
+4. Seed countries + categories:
+   ```bash
+   npx tsx scripts/seed.ts
+   ```
+
+5. Chạy dev:
+   ```bash
+   npm run dev
+   ```
+   Mở `http://localhost:3000`.
+
+## Cron
+
+- `GET /api/cron/sync-ranks` — **mỗi 1 giờ**, fetch top 200 của các combo
+  (country × category × chart) đang được track, ghi vào `rank_snapshots`, check alerts.
+- `GET /api/cron/sync-metadata` — mỗi ngày 3h sáng, refresh metadata app qua iTunes Lookup.
+
+Header bắt buộc: `Authorization: Bearer <CRON_SECRET>`.
+
+Test local:
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/sync-ranks
 ```
-appstore-ranking/
-├── server/            # Node.js + Express
-│   ├── index.js       # API app, port 3000
-│   ├── routes/ranking.js
-│   ├── services/appleApi.js   # fetch + parse Apple RSS (kèm fallback)
-│   ├── cache/cache.js         # cache in-memory TTL 30 phút
-│   └── data/                  # bảng genre ID + danh sách quốc gia
-├── client/            # Vite + React (frontend, port 5173)
-└── README.md
-```
 
-## Cách chạy
+Cấu hình Vercel Cron trong `vercel.json` (Vercel tự gửi header CRON_SECRET).
 
-Yêu cầu: Node.js ≥ 18 (khuyến nghị LTS).
+## Deploy Vercel
 
 ```bash
-# Terminal 1 — Backend
-cd server
-npm install
-npm start          # http://localhost:3000
-
-# Terminal 2 — Frontend
-cd client
-npm install
-npm run dev        # http://localhost:5173 (proxy /api → :3000)
+npx vercel
 ```
+Set 4 env vars trên Vercel Dashboard rồi deploy.
 
-Mở trình duyệt tại `http://localhost:5173`.
-
-## API
+## Cấu trúc
 
 ```
-GET /api/ranking?country=us&category=games&chart=top-free&limit=100
-GET /api/app-rank?appId=123456&country=us&category=games&chart=top-free
-GET /api/health
+app/                # App Router: explore, search, my-apps, app/[appleId], api/...
+components/         # shadcn/ui + component nghiệp vụ
+lib/                # supabase clients, apple.ts (fetch iTunes/Apple RSS), constants, types
+supabase/schema.sql # DDL + functions (chạy thủ công trong SQL Editor 1 lần)
+scripts/seed.ts     # seed countries + categories
+vercel.json         # cron schedule
 ```
-
-- `country`: mã ISO 2 ký tự viết thường (`us`, `vn`, `jp`, `kr`, ...)
-- `category`: slug tiếng Anh (`games`, `social`, `finance`, ...) hoặc `all`; hỗ trợ game sub-genre (`games-puzzle`, `games-action`, ...)
-- `chart`: `top-free` | `top-paid` | `top-grossing`
-- `limit`: tối đa 100 (Apple tự cap ở 100 dù gửi 200)
-- Thêm `refresh=true` để bỏ qua cache
-
-## Nguồn dữ liệu
-
-1. **Endpoint chính (ưu tiên):** `https://itunes.apple.com/{country}/rss/{chart}/limit={limit}/genre={genreId}/json`
-2. **Fallback:** `https://rss.applemarketingtools.com/api/v2/{country}/apps/top-free/{limit}/apps.json` (không hỗ trợ genre — UI hiển thị cảnh báo khi rơi vào fallback)
-
-Ghi chú: endpoint RSS trả `Content-Type: text/javascript` nên parse bằng `text()` + `JSON.parse()` thay vì `res.json()`.
-
-## Deploy gợi ý
-
-- Backend: Render / Railway (free) — set `PORT` tự động.
-- Frontend: Vercel / Netlify — build `npm run build`, output `dist/`; đổi proxy `/api` thành URL backend thật qua biến env `VITE_API_URL` (hoặc rewrite trong config nền tảng).
