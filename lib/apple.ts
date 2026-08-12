@@ -23,7 +23,7 @@ const UA =
 async function fetchWithRetry(
   url: string,
   init?: RequestInit,
-  { timeoutMs = 12000, retries = 2, delayMs = 700 }: { timeoutMs?: number; retries?: number; delayMs?: number } = {}
+  { timeoutMs = 12000, retries = 3, delayMs = 400 }: { timeoutMs?: number; retries?: number; delayMs?: number } = {}
 ): Promise<Response> {
   let lastErr: unknown;
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -40,8 +40,8 @@ async function fetchWithRetry(
         signal: controller.signal,
         cache: "no-store",
       });
-      // 408/429/5xx là lỗi tạm thời có thể retry; 403 là bị chặn hẳn, không retry.
-      if (res.status === 408 || res.status === 429 || res.status >= 500) {
+      // 403/408/429/5xx đều thử lại với delay tăng dần để chống rate-limit của Apple
+      if (res.status === 403 || res.status === 408 || res.status === 429 || res.status >= 500) {
         lastErr = new Error(`Apple HTTP ${res.status}`);
         if (attempt < retries) {
           await sleep(delayMs * (attempt + 1));
@@ -364,7 +364,7 @@ export async function discoverRanksAcrossCountries({
   appleId,
   genreId,
   countries = SCAN_COUNTRY_CODES,
-  concurrency = 25,
+  concurrency = 15,
 }: {
   appleId: string;
   genreId?: number | null;
@@ -407,7 +407,7 @@ export async function discoverRanksAcrossCountries({
         });
       }
     }
-    if (i < tasks.length) await sleep(50);
+    if (i < tasks.length) await sleep(30);
   }
 
   results.sort((a, b) => a.rank - b.rank);

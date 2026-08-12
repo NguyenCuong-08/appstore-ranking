@@ -69,14 +69,14 @@ export async function POST(request: NextRequest, context: RouteContext) {
     .maybeSingle();
   const genreId = appRow?.primary_category_id ?? null;
 
-  // Pha 1: Quét nhanh các nước ưu tiên (PRIORITY_SCAN_COUNTRIES) trong ~0.3s
+  // Pha 1: Quét nhanh các nước ưu tiên (PRIORITY_SCAN_COUNTRIES) trong ~0.5s
   let priorityDiscovered: Awaited<ReturnType<typeof discoverRanksAcrossCountries>> = [];
   try {
     priorityDiscovered = await discoverRanksAcrossCountries({
       appleId: apple_id,
       genreId,
       countries: PRIORITY_SCAN_COUNTRIES,
-      concurrency: 35,
+      concurrency: 15,
     });
   } catch (err) {
     console.error("[discover] Priority scan error:", err);
@@ -108,7 +108,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
           appleId: apple_id,
           genreId,
           countries: remainingCountries,
-          concurrency: 35,
+          concurrency: 15,
         });
         if (fullDiscovered.length > 0) {
           const snapshotsToInsert = fullDiscovered.map((d) => ({
