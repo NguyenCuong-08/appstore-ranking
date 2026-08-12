@@ -136,7 +136,7 @@ export default async function AppDetailPage({ params }: PageProps) {
     0
   );
   const STALE_MS = 6 * 3600 * 1000;
-  const needsDiscovery = ranks.length < 4 || Date.now() - latestCaptured > STALE_MS;
+  const needsDiscovery = ranks.length < 100 || Date.now() - latestCaptured > STALE_MS;
 
   // 6. Tính score & group by country từ data hiện có trong DB
   const score = rankingScore(ranks);

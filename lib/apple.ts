@@ -23,7 +23,7 @@ const UA =
 async function fetchWithRetry(
   url: string,
   init?: RequestInit,
-  { timeoutMs = 12000, retries = 3, delayMs = 400 }: { timeoutMs?: number; retries?: number; delayMs?: number } = {}
+  { timeoutMs = 4000, retries = 2, delayMs = 250 }: { timeoutMs?: number; retries?: number; delayMs?: number } = {}
 ): Promise<Response> {
   let lastErr: unknown;
   for (let attempt = 0; attempt <= retries; attempt++) {
