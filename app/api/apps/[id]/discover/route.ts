@@ -56,11 +56,6 @@ export async function POST(request: NextRequest, context: RouteContext) {
     });
   }
 
-  // Chọn danh sách nước cần quét:
-  // - full=true → tất cả ~160 nước (chậm hơn, đầy đủ hơn)
-  // - full=false → chỉ 24 nước ưu tiên (nhanh cho lần đầu load trang)
-  const countriesToScan = full ? SCAN_COUNTRY_CODES : PRIORITY_SCAN_COUNTRIES;
-
   // Lấy primary_category_id của app từ DB
   const { data: appRow } = await supabase
     .from("apps")
