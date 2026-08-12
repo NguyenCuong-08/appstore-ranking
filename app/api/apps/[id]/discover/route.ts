@@ -31,7 +31,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
     // body optional
   }
 
-  const { apple_id, force = false, full = false } = body;
+  const { apple_id, force = false } = body;
 
   if (!apple_id) {
     return NextResponse.json({ error: "apple_id required" }, { status: 400 });
