@@ -7,7 +7,7 @@ import { CountryPicker } from "@/components/country-picker";
 import { CountryFlag } from "@/components/country-flag";
 import { TrackButton } from "@/components/track-button";
 import { UntrackButton } from "@/components/untrack-button";
-// import { RankHistoryChart } from "@/components/rank-history-chart";
+import { RankHistoryChart } from "@/components/rank-history-chart";
 // import { AlertManager } from "@/components/alert-manager";
 
 interface AppDetailProps {
@@ -124,6 +124,7 @@ export function ToplifyAppDetail({
   const [showMenu, setShowMenu] = useState<boolean>(false);
   const [page, setPage] = useState<number>(0);
   const [discovering, setDiscovering] = useState<boolean>(false);
+  const [selectedCountry, setSelectedCountry] = useState<string | null>(null);
   const PAGE_SIZE = 15;
 
   // Auto-trigger rank discovery siêu tốc cho toàn bộ ~160 nước
@@ -593,8 +594,8 @@ export function ToplifyAppDetail({
         <CountryPicker appId={app.id} initialPinned={pinnedCountries} />
       )}
 
-      {/* Optional Ranking History Chart (tạm ẩn) */}
-      {/* {showHistoryChart && (
+      {/* Ranking history chart cho country đang được click trong TOP RANKING */}
+      {showHistoryChart && selectedCountry && (
         <div
           style={{
             background: "#1c1c1e",
@@ -613,9 +614,13 @@ export function ToplifyAppDetail({
           >
             RANKING HISTORY
           </div>
-          <RankHistoryChart appId={app.id} pinnedCountries={pinnedCountries} />
+          <RankHistoryChart
+            appId={app.id}
+            pinnedCountries={pinnedCountries}
+            country={selectedCountry}
+          />
         </div>
-      )} */}
+      )}
 
       {/* 5. TOP RANKING Section Header & Sort Pill Controls */}
       <div
@@ -640,6 +645,9 @@ export function ToplifyAppDetail({
           </div>
           <div style={{ fontSize: "0.8125rem", color: "#8e8e93", marginTop: "0.125rem" }}>
             iOS Charts
+          </div>
+          <div style={{ fontSize: "0.6875rem", color: "#48484a", marginTop: "0.125rem" }}>
+            Tap a country to view rank history
           </div>
         </div>
 
@@ -741,6 +749,9 @@ export function ToplifyAppDetail({
         {pageCountries.map((r, idx) => (
           <div
             key={r.code}
+            onClick={() =>
+              setSelectedCountry((cur) => (cur === r.code ? null : r.code))
+            }
             style={{
               display: "flex",
               alignItems: "center",
@@ -750,6 +761,13 @@ export function ToplifyAppDetail({
                 idx < pageCountries.length - 1
                   ? "1px solid #2c2c2e"
                   : "none",
+              cursor: "pointer",
+              borderRadius: "0.625rem",
+              background:
+                selectedCountry === r.code
+                  ? "rgba(48,209,88,0.08)"
+                  : "transparent",
+              transition: "background 120ms",
             }}
           >
             {/* Country Flag & Name */}
@@ -766,6 +784,21 @@ export function ToplifyAppDetail({
               >
                 {countryName(r.code)}
               </span>
+              {selectedCountry === r.code && (
+                <span
+                  style={{
+                    fontSize: "0.6875rem",
+                    color: "#30d158",
+                    fontWeight: 600,
+                    letterSpacing: "0.05em",
+                    background: "rgba(48,209,88,0.15)",
+                    borderRadius: "999px",
+                    padding: "0.125rem 0.5rem",
+                  }}
+                >
+                  CHART
+                </span>
+              )}
             </div>
 
             {/* Rank change + Best rank pill — layout giống Toplify */}

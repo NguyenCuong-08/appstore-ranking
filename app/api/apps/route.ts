@@ -106,38 +106,34 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Trả về response ngay — không block người dùng chờ discovery
-  // Discovery full scan chạy background (fire-and-forget)
-  const appSnapshot = app; // capture để dùng trong closure
-  void (async () => {
-    try {
-      const discovered = await discoverRanksAcrossCountries({
-        appleId: appSnapshot.apple_id,
-        genreId: appSnapshot.primary_category_id,
-        countries: SCAN_COUNTRY_CODES, // Quét toàn bộ ~160 nước ngay khi add
-        concurrency: 25,
-      });
+  // Quét toàn bộ ~160 nước ngay khi add app (chạy trong ~1-2s)
+  try {
+    const discovered = await discoverRanksAcrossCountries({
+      appleId: app.apple_id,
+      genreId: app.primary_category_id,
+      countries: SCAN_COUNTRY_CODES,
+      concurrency: 30,
+    });
 
-      if (discovered.length > 0) {
-        const snapshots = discovered.map((d) => ({
-          app_id: appSnapshot.id,
-          country_code: d.country_code,
-          category_id: d.category_id ?? null,
-          chart_type: d.chart_type,
-          rank: d.rank,
-        }));
+    if (discovered.length > 0) {
+      const snapshots = discovered.map((d) => ({
+        app_id: app.id,
+        country_code: d.country_code,
+        category_id: d.category_id ?? null,
+        chart_type: d.chart_type,
+        rank: d.rank,
+      }));
 
-        for (let i = 0; i < snapshots.length; i += 500) {
-          await supabase.from("rank_snapshots").insert(snapshots.slice(i, i + 500));
-        }
-        console.log(
-          `[add-app] Discovery complete: ${appSnapshot.apple_id} found in ${discovered.length} charts`
-        );
+      for (let i = 0; i < snapshots.length; i += 500) {
+        await supabase.from("rank_snapshots").insert(snapshots.slice(i, i + 500));
       }
-    } catch (err) {
-      console.error("[add-app] Background discovery failed:", err);
+      console.log(
+        `[add-app] Discovery complete: ${app.apple_id} found in ${discovered.length} charts`
+      );
     }
-  })();
+  } catch (err) {
+    console.error("[add-app] Discovery failed:", err);
+  }
 
   return NextResponse.json({ app, tracked: true });
 }

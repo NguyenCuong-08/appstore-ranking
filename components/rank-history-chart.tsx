@@ -40,14 +40,26 @@ const LINE_COLORS = [
   "#84cc16",
 ];
 
+type RangeKey = "all" | "30" | "7" | "1";
+
+const RANGES: { key: RangeKey; label: string; days: number }[] = [
+  { key: "all", label: "All", days: 365 },
+  { key: "30", label: "1M", days: 30 },
+  { key: "7", label: "1W", days: 7 },
+  { key: "1", label: "1D", days: 1 },
+];
+
 export function RankHistoryChart({
   appId,
   pinnedCountries,
+  country,
 }: {
   appId: string;
   pinnedCountries: string[];
+  country?: string;
 }) {
   const [chartType, setChartType] = useState<ChartType>("top-free");
+  const [range, setRange] = useState<RangeKey>("30");
   const [rows, setRows] = useState<HistoryRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -56,7 +68,10 @@ export function RankHistoryChart({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/apps/${appId}/rank-history?days=30`);
+      const days = RANGES.find((r) => r.key === range)?.days ?? 30;
+      const params = new URLSearchParams({ days: String(days) });
+      if (country) params.set("country", country);
+      const res = await fetch(`/api/apps/${appId}/rank-history?${params.toString()}`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to load");
       setRows(data.data ?? []);
@@ -65,19 +80,20 @@ export function RankHistoryChart({
     } finally {
       setLoading(false);
     }
-  }, [appId]);
+  }, [appId, range, country]);
 
   useEffect(() => {
     load();
   }, [load]);
 
   const countries = useMemo(() => {
+    if (country) return [country];
     const filter =
       pinnedCountries.length > 0
         ? new Set(pinnedCountries)
         : new Set(rows.map((r) => r.country_code));
     return [...filter];
-  }, [rows, pinnedCountries]);
+  }, [rows, pinnedCountries, country]);
 
   const data = useMemo(() => {
     const filtered = rows.filter((r) => r.chart_type === chartType);
@@ -86,7 +102,7 @@ export function RankHistoryChart({
       if (r.rank === null || r.rank === undefined) continue;
       const date = r.captured_at.slice(0, 10);
       const bucket = byDate.get(date) ?? { date };
-      if (pinnedCountries.length === 0 || countries.includes(r.country_code)) {
+      if (countries.includes(r.country_code)) {
         bucket[r.country_code] = r.rank;
       }
       byDate.set(date, bucket);
@@ -94,7 +110,7 @@ export function RankHistoryChart({
     return [...byDate.values()].sort((a, b) =>
       String(a.date).localeCompare(String(b.date))
     );
-  }, [rows, chartType, countries, pinnedCountries.length]);
+  }, [rows, chartType, countries]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.875rem" }}>
@@ -121,9 +137,38 @@ export function RankHistoryChart({
             ))}
           </SelectContent>
         </Select>
-        <span style={{ fontSize: "0.8125rem", color: "oklch(0.44 0.01 250)" }}>
-          Last 30 days · Rank #1 at top
-        </span>
+
+        {/* Time range pills */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            background: "oklch(0.20 0.012 250)",
+            border: "1px solid oklch(1 0 0 / 8%)",
+            borderRadius: "999px",
+            padding: "3px",
+            gap: "2px",
+          }}
+        >
+          {RANGES.map((r) => (
+            <button
+              key={r.key}
+              onClick={() => setRange(r.key)}
+              style={{
+                background: range === r.key ? "oklch(0.30 0.02 250)" : "transparent",
+                color: range === r.key ? "oklch(0.96 0 0)" : "oklch(0.60 0.01 250)",
+                border: "none",
+                borderRadius: "999px",
+                padding: "0.25rem 0.625rem",
+                fontSize: "0.75rem",
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              {r.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* States */}
@@ -185,7 +230,7 @@ export function RankHistoryChart({
       {!loading && !error && data.length > 0 && (
         <div style={{ position: "relative" }}>
           <style>{`@keyframes spin2 { to { transform: rotate(360deg); } }`}</style>
-          <ResponsiveContainer width="100%" height={300}>
+          <ResponsiveContainer width="100%" height={280}>
             <LineChart
               data={data}
               margin={{ top: 8, right: 16, left: 0, bottom: 8 }}
@@ -234,19 +279,21 @@ export function RankHistoryChart({
                   ),
                 ]}
               />
-              <Legend
-                formatter={(value: string) => (
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: "0.25rem" }}>
-                    <CountryFlag code={value} width={16} height={11} />
-                    {value.toUpperCase()}
-                  </span>
-                )}
-                wrapperStyle={{
-                  fontSize: "0.8rem",
-                  color: "oklch(0.65 0.01 250)",
-                  paddingTop: "0.5rem",
-                }}
-              />
+              {countries.length > 1 && (
+                <Legend
+                  formatter={(value: string) => (
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: "0.25rem" }}>
+                      <CountryFlag code={value} width={16} height={11} />
+                      {value.toUpperCase()}
+                    </span>
+                  )}
+                  wrapperStyle={{
+                    fontSize: "0.8rem",
+                    color: "oklch(0.65 0.01 250)",
+                    paddingTop: "0.5rem",
+                  }}
+                />
+              )}
               {countries.map((code, i) => (
                 <Line
                   key={code}

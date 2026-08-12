@@ -13,72 +13,90 @@ export function createDbClient() {
   );
 }
 
-// Rank mới nhất cho từng (country, chart_type) — chỉ đọc snapshot chart OVERALL
-// (category_id null) vì ranking của app là vị trí trong Top Charts overall Free/Paid.
+// Rank mới nhất cho từng (country, chart_type) — gồm cả rank OVERALL (category_id null)
+// và rank trong chart primary category. Với mỗi (country, chart) lấy rank TỐT NHẤT
+// (thấp nhất) trong tất cả snapshot gần nhất — như vậy app có rank trong category
+// (vd TikTok trong Entertainment) vẫn được đếm đủ country.
 export async function getLatestOverallRanks(
   supabase: ReturnType<typeof createDbClient>,
   appId: string
 ): Promise<LatestRank[]> {
-  // limit(10000): Supabase mặc định trả tối đa 1000 rows nếu không set limit.
-  // Một app có thể có ~167 countries × 3 charts × nhiều snapshots = hàng nghìn rows.
-  // Đặt limit lớn để đảm bảo lấy đủ snapshots cho tất cả countries.
+  // limit(30000): Supabase mặc định trả tối đa 1000 rows nếu không set limit.
+  // Một app có thể có ~175 countries × 2 charts × (overall + category) × nhiều snapshots.
+  // Đặt limit lớn để đảm bảo lấy đủ snapshots cho tất cả countries/charts/categories.
   const { data } = await supabase
     .from("rank_snapshots")
-    .select("country_code, chart_type, rank, captured_at")
+    .select("country_code, chart_type, category_id, rank, captured_at")
     .eq("app_id", appId)
     .order("captured_at", { ascending: false })
-    .limit(10000);
+    .limit(30000);
 
-  // Với mỗi (country, chart_type): giữ 2 snapshot mới nhất
+  // Với mỗi (country, chart_type, category_id): giữ 2 snapshot mới nhất
   // latest = snapshot đầu tiên (mới nhất)
-  // previous = snapshot thứ hai (để tính rank thay đổi)
-  const latest = new Map<string, LatestRank>();
-  const latestTimeMap = new Map<string, number>();
+  // previous = snapshot thứ hai (để tính rank thay đổi thật từ dữ liệu, KHÔNG fake)
+  type RawRow = {
+    country_code: string;
+    chart_type: string;
+    category_id: number | null;
+    rank: number | null;
+    captured_at: string | null;
+  };
+  const latest = new Map<string, { row: RawRow; time: number }>();
   const prevRankMap = new Map<string, number | null>();
 
-  for (const row of data ?? []) {
-    const key = `${row.country_code}:${row.chart_type}`;
+  for (const row of (data ?? []) as RawRow[]) {
+    const key = `${row.country_code}:${row.chart_type}:${row.category_id ?? "overall"}`;
     const rowTime = row.captured_at ? new Date(row.captured_at).getTime() : 0;
 
     if (!latest.has(key)) {
-      latest.set(key, {
-        country_code: row.country_code,
-        chart_type: row.chart_type as ChartType,
-        rank: row.rank,
-        prev_rank: null,
-        captured_at: row.captured_at,
-      });
-      latestTimeMap.set(key, rowTime);
+      latest.set(key, { row, time: rowTime });
     } else if (!prevRankMap.has(key)) {
-      const latestTime = latestTimeMap.get(key) ?? rowTime;
-      // Lấy prev_rank từ session trước (cách nhau > 60s hoặc rank khác hẳn)
-      if (latestTime - rowTime > 60000 || row.rank !== latest.get(key)?.rank) {
+      const latestTime = latest.get(key)!.time;
+      // Lấy prev_rank từ session trước thật (cách nhau > 60s hoặc rank khác hẳn)
+      if (
+        latestTime - rowTime > 60000 ||
+        row.rank !== latest.get(key)!.row.rank
+      ) {
         prevRankMap.set(key, row.rank ?? null);
       }
     }
   }
 
-  // Tạo prev_rank giả lập thực tế nếu chưa có snapshot thứ 2 trong DB (app mới quét lần đầu)
-  const getBaselinePrevRank = (code: string, chart: string, current: number | null): number | null => {
-    if (current === null) return null;
-    let hash = 0;
-    for (let i = 0; i < code.length; i++) hash = (hash << 5) - hash + code.charCodeAt(i);
-    hash += chart.length;
-    const deltas = [35, -12, 84, -24, 8, -39, 18, -5, 11, -19, 30, -8, 14, -32, 6, -11, 22, -4, 5, -15, 39, -3];
-    const delta = deltas[Math.abs(hash) % deltas.length];
-    const prev = current + delta;
-    return Math.max(1, Math.min(200, prev));
-  };
+  // Gộp theo (country, chart_type): chọn entry có rank tốt nhất (thấp nhất)
+  // trong các category để đếm đủ country — ưu tiên snapshot gần nhất khi rank bằng nhau.
+  const best = new Map<
+    string,
+    {
+      row: RawRow;
+      time: number;
+      prev_rank: number | null;
+    }
+  >();
+  for (const [key, v] of latest) {
+    const [country, chart] = key.split(":");
+    const ckey = `${country}:${chart}`;
+    const curRank = v.row.rank ?? Infinity;
+    const existing = best.get(ckey);
+    const existingRank = existing?.row.rank ?? Infinity;
 
-  for (const [key, lr] of latest) {
-    const dbPrev = prevRankMap.get(key);
-    if (dbPrev !== undefined && dbPrev !== null) {
-      lr.prev_rank = dbPrev;
-    } else {
-      // Nếu chưa có lịch sử snapshot cũ trong DB, tạo baseline prev_rank từ hash để hiển thị ↑ / ↓ ngay
-      lr.prev_rank = getBaselinePrevRank(lr.country_code, lr.chart_type, lr.rank);
+    if (
+      !existing ||
+      curRank < existingRank ||
+      (curRank === existingRank && v.time > existing.time)
+    ) {
+      best.set(ckey, {
+        row: v.row,
+        time: v.time,
+        prev_rank: prevRankMap.get(key) ?? null,
+      });
     }
   }
 
-  return [...latest.values()];
+  return [...best.values()].map(({ row, prev_rank }) => ({
+    country_code: row.country_code,
+    chart_type: row.chart_type as ChartType,
+    rank: row.rank,
+    prev_rank,
+    captured_at: row.captured_at,
+  }));
 }

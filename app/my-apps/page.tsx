@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { createDbClient } from "@/lib/supabase/db";
+import { createDbClient, getLatestOverallRanks } from "@/lib/supabase/db";
 import { UntrackButton } from "@/components/untrack-button";
 import type { App } from "@/lib/types";
 
@@ -9,13 +9,6 @@ export const metadata: Metadata = {
 };
 
 export const dynamic = "force-dynamic";
-
-interface AppStats {
-  app_id: string;
-  best_rank: number | null;
-  countries_in_top: number;
-  last_updated: string | null;
-}
 
 function StarRating({ rating }: { rating: number | null }) {
   if (!rating) return null;
@@ -168,55 +161,38 @@ export default async function MyAppsPage() {
 
   const appIds = tracked.map((t) => t.app_id);
 
-  const [{ data: apps }, { data: snapshots }] = await Promise.all([
-    supabase.from("apps").select("*").in("id", appIds),
-    supabase
-      .from("rank_snapshots")
-      .select("app_id, country_code, rank, captured_at")
-      .in("app_id", appIds)
-      .is("category_id", null),
-  ]);
+  const { data: apps } = await supabase
+    .from("apps")
+    .select("*")
+    .in("id", appIds);
 
-  // Aggregate stats per app từ snapshot chart overall (category_id null)
-  interface Agg {
-    best_rank: number | null;
-    countries: Set<string>;
-    last_updated: string | null;
+  // Aggregation dùng rank MỚI NHẤT cho từng (country) — gồm cả overall + primary category.
+  // KHÔNG đếm snapshot cũ (app đã rớt hạng khỏi 1 nước thì không tính nước đó nữa).
+  const stats = new Map<string, { best_rank: number | null; countries_in_top: number; last_updated: string | null }>();
+  for (const app of (apps ?? []) as App[]) {
+    const ranks = await getLatestOverallRanks(supabase, app.id);
+    const ranked = ranks.filter(
+      (r) => r.rank !== null && r.rank !== undefined && (r.rank as number) <= 200
+    );
+    const countries = new Set(ranked.map((r) => r.country_code));
+    const best = ranked.reduce<number | null>(
+      (min, r) => (min === null || (r.rank as number) < min ? (r.rank as number) : min),
+      null
+    );
+    const lastUpdated = ranks.reduce<string | null>(
+      (max, r) => (r.captured_at && (!max || r.captured_at > max) ? r.captured_at : max),
+      null
+    );
+    stats.set(app.id, {
+      best_rank: best,
+      countries_in_top: countries.size,
+      last_updated: lastUpdated,
+    });
   }
-  const aggById = new Map<string, Agg>();
-  for (const s of snapshots ?? []) {
-    const agg = aggById.get(s.app_id) ?? {
-      best_rank: null as number | null,
-      countries: new Set<string>(),
-      last_updated: null as string | null,
-    };
-    if (s.rank !== null && s.rank !== undefined) {
-      if (agg.best_rank === null || (s.rank as number) < agg.best_rank) {
-        agg.best_rank = s.rank as number;
-      }
-      if ((s.rank as number) <= 200) agg.countries.add(s.country_code);
-    }
-    if (s.captured_at && (agg.last_updated === null || s.captured_at > agg.last_updated)) {
-      agg.last_updated = s.captured_at;
-    }
-    aggById.set(s.app_id, agg);
-  }
-
-  const statsById = new Map<string, AppStats>(
-    [...aggById.entries()].map(([app_id, agg]) => [
-      app_id,
-      {
-        app_id,
-        best_rank: agg.best_rank,
-        countries_in_top: agg.countries.size,
-        last_updated: agg.last_updated,
-      },
-    ])
-  );
 
   const rows = ((apps ?? []) as App[])
     .map((app) => {
-      const s = statsById.get(app.id);
+      const s = stats.get(app.id);
       return {
         app,
         bestRank: s?.best_rank ?? null,

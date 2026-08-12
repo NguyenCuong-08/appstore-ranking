@@ -23,7 +23,7 @@ const UA =
 async function fetchWithRetry(
   url: string,
   init?: RequestInit,
-  { timeoutMs = 4000, retries = 2, delayMs = 250 }: { timeoutMs?: number; retries?: number; delayMs?: number } = {}
+  { timeoutMs = 3000, retries = 1, delayMs = 150 }: { timeoutMs?: number; retries?: number; delayMs?: number } = {}
 ): Promise<Response> {
   let lastErr: unknown;
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -40,8 +40,9 @@ async function fetchWithRetry(
         signal: controller.signal,
         cache: "no-store",
       });
-      // 403/408/429/5xx đều thử lại với delay tăng dần để chống rate-limit của Apple
-      if (res.status === 403 || res.status === 408 || res.status === 429 || res.status >= 500) {
+      // 403, 404, 400 là lỗi vĩnh viễn (do Apple deprecated / chặn RSS) -> trả về ngay, KHÔNG retry
+      // Chỉ retry các lỗi tạm thời: 429 (rate-limit) hoặc 5xx (server failure)
+      if (res.status === 429 || res.status >= 500) {
         lastErr = new Error(`Apple HTTP ${res.status}`);
         if (attempt < retries) {
           await sleep(delayMs * (attempt + 1));
@@ -148,9 +149,11 @@ async function fetchFallback({
   chart: string;
   limit: number;
 }): Promise<ChartEntry[]> {
-  const chartPath = CHART_MAP_FALLBACK[chart] || CHART_MAP_FALLBACK["top-free"];
+  const chartPath = CHART_MAP_FALLBACK[chart];
+  if (!chartPath) return []; // Không fallback chart không hỗ trợ (như top-grossing)
   const url = `https://rss.applemarketingtools.com/api/v2/${country}/apps/${chartPath}/${limit}/apps.json`;
   const res = await fetchWithRetry(url);
+  if (!res.ok) return [];
   const data = await res.json();
   const results = (data.feed?.results ?? []) as FallbackResult[];
   return results.map((app, idx) => ({
@@ -332,28 +335,31 @@ export async function fetchOverallChart(
   if (genreId) {
     return fetchTopCharts({ country, chart, genreId, limit });
   }
+  // Chỉ dùng Apple Marketing Tools cho overall chart (không fallback sang legacy iTunes RSS
+  // vì legacy RSS đang bị Apple chặn 403 toàn cầu → timeout gây chậm nghiêm trọng)
   const chartPath = CHART_MAP_FALLBACK[chart];
-  if (chartPath) {
-    try {
-      const safeLimit = Math.min(limit, 100);
-      const url = `https://rss.applemarketingtools.com/api/v2/${country}/apps/${chartPath}/${safeLimit}/apps.json`;
-      const res = await fetch(url, { next: { revalidate: 1800 } });
-      if (!res.ok) throw new Error(`Apple Marketing Tools error: ${res.status}`);
-      const data = await res.json();
-      const results = (data.feed?.results ?? []) as FallbackResult[];
-      return results.map((app, idx) => ({
-        rank: idx + 1,
-        id: String(app.id ?? ""),
-        name: app.name || "",
-        developer: app.artistName || "",
-        icon: app.artworkUrl100 || null,
-        url: app.url || "",
-      }));
-    } catch {
-      // fallthrough to legacy endpoint
-    }
+  if (!chartPath) return []; // chart không hỗ trợ (ví dụ top-grossing)
+  try {
+    const safeLimit = Math.min(limit, 100);
+    const url = `https://rss.applemarketingtools.com/api/v2/${country}/apps/${chartPath}/${safeLimit}/apps.json`;
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(3500),
+      headers: { "User-Agent": UA },
+    });
+    if (!res.ok) return []; // Quốc gia không có App Store hoặc chart trống → bỏ qua
+    const data = await res.json();
+    const results = (data.feed?.results ?? []) as FallbackResult[];
+    return results.map((app, idx) => ({
+      rank: idx + 1,
+      id: String(app.id ?? ""),
+      name: app.name || "",
+      developer: app.artistName || "",
+      icon: app.artworkUrl100 || null,
+      url: app.url || "",
+    }));
+  } catch {
+    return []; // Timeout hoặc lỗi mạng → bỏ qua
   }
-  return fetchTopCharts({ country, chart, limit });
 }
 
 /**
@@ -364,22 +370,22 @@ export async function discoverRanksAcrossCountries({
   appleId,
   genreId,
   countries = SCAN_COUNTRY_CODES,
-  concurrency = 15,
+  concurrency = 35,
 }: {
   appleId: string;
   genreId?: number | null;
   countries?: string[];
   concurrency?: number;
 }): Promise<DiscoveredRank[]> {
-  const charts: ChartType[] = ["top-free", "top-paid", "top-grossing"];
+  const charts: ChartType[] = ["top-free", "top-paid"];
   const tasks: Array<{ country: string; chart: ChartType; genreId?: number | null }> = [];
 
   for (const c of countries) {
     for (const ch of charts) {
-      // Overall chart
-      tasks.push({ country: c, chart: ch });
-      // Primary category chart (nếu app có genreId)
-      if (genreId) {
+      tasks.push({ country: c, chart: ch, genreId: null });
+    }
+    if (genreId) {
+      for (const ch of charts) {
         tasks.push({ country: c, chart: ch, genreId });
       }
     }
@@ -407,7 +413,6 @@ export async function discoverRanksAcrossCountries({
         });
       }
     }
-    if (i < tasks.length) await sleep(30);
   }
 
   results.sort((a, b) => a.rank - b.rank);

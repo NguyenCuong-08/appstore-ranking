@@ -129,14 +129,17 @@ export default async function AppDetailPage({ params }: PageProps) {
   // 4. Fetch latest ranks từ DB (không block để discovery hoàn tất)
   const ranks = await getLatestOverallRanks(supabase, app.id);
 
-  // 5. Kiểm tra xem data có cần discovery mới không (stale > 6h hoặc chưa có rank nào)
+  // 5. Kiểm tra xem data có cần discovery mới không
+  //    - Chưa có rank nào (app mới track, chưa có snapshot) → cần scan
+  //    - Hoặc data quá cũ (> 6h) → cần scan lại
+  //    KHÔNG dùng ranks.length < N vì app ít nước (vd TikTok 4 nước) không nên rescan mỗi lần load.
   const latestCaptured = ranks.reduce(
     (max, r) =>
       r.captured_at ? Math.max(max, new Date(r.captured_at).getTime()) : max,
     0
   );
   const STALE_MS = 6 * 3600 * 1000;
-  const needsDiscovery = ranks.length < 100 || Date.now() - latestCaptured > STALE_MS;
+  const needsDiscovery = ranks.length === 0 || Date.now() - latestCaptured > STALE_MS;
 
   // 6. Tính score & group by country từ data hiện có trong DB
   const score = rankingScore(ranks);

@@ -37,15 +37,16 @@ export async function POST(request: NextRequest, context: RouteContext) {
     return NextResponse.json({ error: "apple_id required" }, { status: 400 });
   }
 
-  // Check staleness: nếu data còn fresh và không force → skip
+  // Check staleness: nếu đã quét đủ > 50 countries và data còn fresh (< 6h) và không force → skip
   const STALE_MS = 6 * 3600 * 1000;
   const currentRanks = await getLatestOverallRanks(supabase, id);
+  const countryCount = new Set(currentRanks.map((r) => r.country_code)).size;
   const latestCaptured = currentRanks.reduce(
     (max, r) =>
       r.captured_at ? Math.max(max, new Date(r.captured_at).getTime()) : max,
     0
   );
-  const isFresh = currentRanks.length >= 4 && Date.now() - latestCaptured < STALE_MS;
+  const isFresh = countryCount >= 50 && Date.now() - latestCaptured < STALE_MS;
 
   if (isFresh && !force) {
     return NextResponse.json({
@@ -53,6 +54,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
       skipped: true,
       message: "Data is fresh, skipped discovery",
       rank_count: currentRanks.length,
+      country_count: countryCount,
     });
   }
 
@@ -64,22 +66,22 @@ export async function POST(request: NextRequest, context: RouteContext) {
     .maybeSingle();
   const genreId = appRow?.primary_category_id ?? null;
 
-  // Pha 1: Quét nhanh các nước ưu tiên (PRIORITY_SCAN_COUNTRIES) trong ~0.5s
-  let priorityDiscovered: Awaited<ReturnType<typeof discoverRanksAcrossCountries>> = [];
+  // Quét toàn bộ ~160 nước (SCAN_COUNTRY_CODES) với concurrency = 30 (chạy trong ~1-2s)
+  let discovered: Awaited<ReturnType<typeof discoverRanksAcrossCountries>> = [];
   try {
-    priorityDiscovered = await discoverRanksAcrossCountries({
+    discovered = await discoverRanksAcrossCountries({
       appleId: apple_id,
       genreId,
-      countries: PRIORITY_SCAN_COUNTRIES,
-      concurrency: 15,
+      countries: SCAN_COUNTRY_CODES,
+      concurrency: 30,
     });
   } catch (err) {
-    console.error("[discover] Priority scan error:", err);
+    console.error("[discover] Full scan error:", err);
   }
 
-  // Lưu kết quả pha 1 vào DB
-  if (priorityDiscovered.length > 0) {
-    const snapshotsToInsert = priorityDiscovered.map((d) => ({
+  // Lưu kết quả vào DB
+  if (discovered.length > 0) {
+    const snapshotsToInsert = discovered.map((d) => ({
       app_id: id,
       country_code: d.country_code,
       category_id: d.category_id ?? null,
@@ -91,43 +93,13 @@ export async function POST(request: NextRequest, context: RouteContext) {
     }
   }
 
-  // Pha 2: Quét nốt toàn bộ các nước còn lại (SCAN_COUNTRY_CODES) dưới dạng background task
-  const remainingCountries = SCAN_COUNTRY_CODES.filter(
-    (c) => !PRIORITY_SCAN_COUNTRIES.includes(c)
-  );
+  const discoveredCountries = new Set(discovered.map((d) => d.country_code)).size;
 
-  if (remainingCountries.length > 0) {
-    void (async () => {
-      try {
-        const fullDiscovered = await discoverRanksAcrossCountries({
-          appleId: apple_id,
-          genreId,
-          countries: remainingCountries,
-          concurrency: 15,
-        });
-        if (fullDiscovered.length > 0) {
-          const snapshotsToInsert = fullDiscovered.map((d) => ({
-            app_id: id,
-            country_code: d.country_code,
-            category_id: d.category_id ?? null,
-            chart_type: d.chart_type,
-            rank: d.rank,
-          }));
-          for (let i = 0; i < snapshotsToInsert.length; i += 500) {
-            await supabase.from("rank_snapshots").insert(snapshotsToInsert.slice(i, i + 500));
-          }
-        }
-      } catch (err) {
-        console.error("[discover] Background full scan error:", err);
-      }
-    })();
-  }
-
-  // Trả về 200 OK ngay lập tức (< 0.5s) để không bao giờ bị 504 Gateway Timeout trên Vercel
   return NextResponse.json({
     ok: true,
     skipped: false,
-    priority_count: priorityDiscovered.length,
-    message: "Discovery initialized successfully",
+    discovered_ranks: discovered.length,
+    discovered_countries: discoveredCountries,
+    message: "Discovery completed successfully across global markets",
   });
 }
