@@ -113,15 +113,16 @@ export async function POST(request: NextRequest) {
     try {
       const discovered = await discoverRanksAcrossCountries({
         appleId: appSnapshot.apple_id,
+        genreId: appSnapshot.primary_category_id,
         countries: SCAN_COUNTRY_CODES, // Quét toàn bộ ~160 nước ngay khi add
-        concurrency: 8,
+        concurrency: 25,
       });
 
       if (discovered.length > 0) {
         const snapshots = discovered.map((d) => ({
           app_id: appSnapshot.id,
           country_code: d.country_code,
-          category_id: null,
+          category_id: d.category_id ?? null,
           chart_type: d.chart_type,
           rank: d.rank,
         }));

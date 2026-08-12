@@ -4,6 +4,7 @@ import { createDbClient, getLatestOverallRanks } from "@/lib/supabase/db";
 import { lookupApp } from "@/lib/apple";
 import type { LatestRank } from "@/lib/types";
 import { ToplifyAppDetail } from "@/components/toplify-app-detail";
+import { UntrackedAppGate } from "@/components/untracked-app-gate";
 import { countryName } from "@/lib/constants";
 
 export const metadata: Metadata = {
@@ -106,6 +107,24 @@ export default async function AppDetailPage({ params }: PageProps) {
 
   const tracking = Boolean(ta);
   const pinnedCountries: string[] = ta?.pinned_countries ?? [];
+
+  // CHỈ APP ĐÃ ĐƯỢC THÊM VÀO MY APPS MỚI CHO XEM TRANG CHI TIẾT
+  if (!tracking) {
+    return (
+      <UntrackedAppGate
+        app={{
+          id: app.id,
+          apple_id: app.apple_id,
+          name: app.name,
+          developer: app.developer,
+          icon_url: app.icon_url,
+          price: app.price,
+          rating: app.rating,
+          rating_count: app.rating_count,
+        }}
+      />
+    );
+  }
 
   // 4. Fetch latest ranks từ DB (không block để discovery hoàn tất)
   const ranks = await getLatestOverallRanks(supabase, app.id);
