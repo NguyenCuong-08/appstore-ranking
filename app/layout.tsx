@@ -1,12 +1,13 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Inter, Geist_Mono } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
 import { NavHeader } from "@/components/nav-header";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const inter = Inter({
+  variable: "--font-inter",
   subsets: ["latin"],
+  display: "swap",
 });
 
 const geistMono = Geist_Mono({
@@ -15,9 +16,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "App Store Ranking",
+  title: "Toplify Web — App Store Rank Tracker",
   description:
-    "Theo dõi thứ hạng ứng dụng trên App Store theo quốc gia & danh mục.",
+    "Theo dõi thứ hạng ứng dụng trên App Store theo 175 quốc gia & danh mục. Miễn phí, không cần đăng nhập.",
 };
 
 export default function RootLayout({
@@ -26,13 +27,13 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="vi">
+    <html lang="vi" className="dark">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased min-h-screen`}
+        className={`${inter.variable} ${geistMono.variable} antialiased min-h-screen bg-background text-foreground`}
       >
         <NavHeader />
-        <main className="mx-auto max-w-5xl px-4 py-6">{children}</main>
-        <Toaster />
+        <main className="mx-auto max-w-5xl px-4 pb-10 pt-4">{children}</main>
+        <Toaster theme="dark" />
       </body>
     </html>
   );

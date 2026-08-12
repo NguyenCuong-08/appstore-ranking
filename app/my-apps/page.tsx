@@ -1,13 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { createDbClient } from "@/lib/supabase/db";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { UntrackButton } from "@/components/untrack-button";
 import type { App } from "@/lib/types";
 
 export const metadata: Metadata = {
-  title: "My Apps — App Store Ranking",
+  title: "My Apps — Toplify Web",
 };
 
 export const dynamic = "force-dynamic";
@@ -19,6 +17,39 @@ interface AppStats {
   last_updated: string | null;
 }
 
+function StarRating({ rating }: { rating: number | null }) {
+  if (!rating) return null;
+  const full = Math.floor(rating);
+  const hasHalf = rating - full >= 0.5;
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: "0.125rem" }}>
+      {Array.from({ length: 5 }).map((_, i) => (
+        <svg
+          key={i}
+          width="10"
+          height="10"
+          viewBox="0 0 24 24"
+          fill={i < full ? "var(--blue)" : i === full && hasHalf ? "url(#half)" : "none"}
+          stroke="var(--blue)"
+          strokeWidth="2"
+          opacity={i >= full + (hasHalf ? 1 : 0) ? 0.3 : 1}
+        >
+          <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+        </svg>
+      ))}
+      <span
+        style={{
+          fontSize: "0.75rem",
+          color: "oklch(0.65 0.01 250)",
+          marginLeft: "0.25rem",
+        }}
+      >
+        {rating.toFixed(1)}
+      </span>
+    </span>
+  );
+}
+
 export default async function MyAppsPage() {
   const supabase = createDbClient();
 
@@ -28,16 +59,109 @@ export default async function MyAppsPage() {
 
   if (!tracked || tracked.length === 0) {
     return (
-      <div className="space-y-4">
+      <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
         <div>
-          <h1 className="text-2xl font-bold">My Apps</h1>
-          <p className="text-muted-foreground">
-            Lưu app yêu thích để theo dõi thứ hạng. Chưa có app nào.
+          <h1
+            style={{
+              fontSize: "1.625rem",
+              fontWeight: 700,
+              letterSpacing: "-0.03em",
+              color: "oklch(0.97 0 0)",
+              margin: 0,
+            }}
+          >
+            My Apps
+          </h1>
+          <p
+            style={{
+              fontSize: "0.875rem",
+              color: "oklch(0.56 0.01 250)",
+              marginTop: "0.25rem",
+            }}
+          >
+            Track your apps to monitor rankings over time
           </p>
         </div>
-        <Button asChild>
-          <Link href="/search">Tìm app để lưu</Link>
-        </Button>
+
+        {/* Empty state */}
+        <div
+          style={{
+            background: "oklch(0.16 0.012 250)",
+            border: "1px solid oklch(1 0 0 / 7%)",
+            borderRadius: "1rem",
+            padding: "3.5rem 2rem",
+            textAlign: "center",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: "1rem",
+          }}
+        >
+          <div
+            style={{
+              width: "3.5rem",
+              height: "3.5rem",
+              background: "var(--blue-subtle)",
+              borderRadius: "1rem",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <svg
+              width="24"
+              height="24"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="var(--blue)"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M4 4h6v6H4z" />
+              <path d="M14 4h6v6h-6z" />
+              <path d="M4 14h6v6H4z" />
+              <path d="M14 14h6v6h-6z" />
+            </svg>
+          </div>
+          <div>
+            <p
+              style={{
+                fontWeight: 600,
+                fontSize: "1rem",
+                color: "oklch(0.90 0 0)",
+                margin: "0 0 0.375rem",
+              }}
+            >
+              No apps tracked yet
+            </p>
+            <p
+              style={{
+                fontSize: "0.875rem",
+                color: "oklch(0.56 0.01 250)",
+                margin: 0,
+              }}
+            >
+              Search for an app and click &quot;Track&quot; to start monitoring its rankings
+            </p>
+          </div>
+          <Link
+            href="/search"
+            style={{
+              background: "var(--blue)",
+              color: "#fff",
+              borderRadius: "999px",
+              padding: "0.5rem 1.25rem",
+              fontWeight: 600,
+              fontSize: "0.9375rem",
+              textDecoration: "none",
+              boxShadow: "0 2px 12px rgba(59,130,246,0.35)",
+              marginTop: "0.25rem",
+            }}
+          >
+            Search Apps
+          </Link>
+        </div>
       </div>
     );
   }
@@ -66,63 +190,248 @@ export default async function MyAppsPage() {
     .sort((a, b) => (a.bestRank ?? 999) - (b.bestRank ?? 999));
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
+    <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          flexWrap: "wrap",
+          gap: "0.75rem",
+        }}
+      >
         <div>
-          <h1 className="text-2xl font-bold">My Apps</h1>
-          <p className="text-muted-foreground">
-            Các app yêu thích đang theo dõi. Cập nhật mỗi 1 giờ.
+          <h1
+            style={{
+              fontSize: "1.625rem",
+              fontWeight: 700,
+              letterSpacing: "-0.03em",
+              color: "oklch(0.97 0 0)",
+              margin: 0,
+            }}
+          >
+            My Apps
+          </h1>
+          <p
+            style={{
+              fontSize: "0.875rem",
+              color: "oklch(0.56 0.01 250)",
+              marginTop: "0.25rem",
+            }}
+          >
+            {rows.length} app{rows.length !== 1 ? "s" : ""} tracked · Updated every hour
           </p>
         </div>
-        <Button asChild>
-          <Link href="/search">+ Add app</Link>
-        </Button>
+        <Link
+          href="/search"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "0.375rem",
+            background: "var(--blue)",
+            color: "#fff",
+            borderRadius: "999px",
+            padding: "0.4375rem 1rem",
+            fontWeight: 600,
+            fontSize: "0.875rem",
+            textDecoration: "none",
+            boxShadow: "0 2px 10px rgba(59,130,246,0.3)",
+          }}
+        >
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M5 12h14" />
+            <path d="M12 5l7 7-7 7" />
+          </svg>
+          Add App
+        </Link>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2">
+      {/* App cards grid */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
+          gap: "0.75rem",
+        }}
+      >
         {rows.map(({ app, bestRank, countriesInTop, lastUpdated }) => (
-          <div key={app.id} className="rounded-lg border p-4">
-            <div className="flex items-center gap-3">
-              {app.icon_url ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={app.icon_url}
-                  alt=""
-                  width={48}
-                  height={48}
-                  className="rounded-lg"
-                />
-              ) : (
-                <div className="h-12 w-12 rounded-lg bg-muted" />
-              )}
-              <div className="min-w-0 flex-1">
-                <Link
-                  href={`/app/${app.apple_id}`}
-                  className="block truncate font-medium hover:underline"
-                >
-                  {app.name}
-                </Link>
-                <div className="truncate text-xs text-muted-foreground">
-                  {app.developer}
+          <div
+            key={app.id}
+            style={{
+              background: "oklch(0.16 0.012 250)",
+              border: "1px solid oklch(1 0 0 / 7%)",
+              borderRadius: "1rem",
+              overflow: "hidden",
+              transition: "border-color 150ms",
+            }}
+          >
+            <Link href={`/app/${app.apple_id}`} style={{ textDecoration: "none", display: "block", padding: "1rem" }}>
+              {/* App header */}
+              <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                {app.icon_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={app.icon_url}
+                    alt=""
+                    width={52}
+                    height={52}
+                    style={{
+                      borderRadius: "0.875rem",
+                      flexShrink: 0,
+                      border: "1px solid oklch(1 0 0 / 8%)",
+                    }}
+                  />
+                ) : (
+                  <div
+                    style={{
+                      width: 52,
+                      height: 52,
+                      borderRadius: "0.875rem",
+                      background: "oklch(0.22 0.012 250)",
+                      flexShrink: 0,
+                    }}
+                  />
+                )}
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div
+                    style={{
+                      fontWeight: 600,
+                      fontSize: "0.9375rem",
+                      color: "oklch(0.95 0 0)",
+                      letterSpacing: "-0.01em",
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    {app.name}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: "0.8125rem",
+                      color: "oklch(0.56 0.01 250)",
+                      marginTop: "0.125rem",
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    {app.developer}
+                  </div>
+                  {app.rating && <StarRating rating={app.rating} />}
                 </div>
               </div>
-            </div>
-            <div className="mt-3 flex items-center gap-2 text-sm">
-              <Badge
-                variant={
-                  bestRank && bestRank <= 3 ? "default" : "secondary"
-                }
+
+              {/* Stats row */}
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: "0.5rem",
+                  marginTop: "0.875rem",
+                }}
               >
-                Best rank: {bestRank ?? "—"}
-              </Badge>
-              <Badge variant="outline">Top 200: {countriesInTop} nước</Badge>
-            </div>
-            <div className="mt-2 text-xs text-muted-foreground">
-              {lastUpdated
-                ? `Last updated ${new Date(lastUpdated).toLocaleString()}`
-                : "Chưa có dữ liệu rank (chờ cron sync)"}
-            </div>
-            <div className="mt-3 flex justify-end">
+                <div
+                  style={{
+                    background: "oklch(0.20 0.012 250)",
+                    borderRadius: "0.625rem",
+                    padding: "0.5rem 0.75rem",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: "0.7rem",
+                      color: "oklch(0.50 0.01 250)",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.05em",
+                      fontWeight: 600,
+                      marginBottom: "0.125rem",
+                    }}
+                  >
+                    Best Rank
+                  </div>
+                  <div
+                    style={{
+                      fontSize: "1.25rem",
+                      fontWeight: 700,
+                      color:
+                        bestRank !== null && bestRank <= 10
+                          ? "var(--blue)"
+                          : "oklch(0.85 0 0)",
+                      letterSpacing: "-0.03em",
+                    }}
+                  >
+                    {bestRank !== null ? `#${bestRank}` : "—"}
+                  </div>
+                </div>
+                <div
+                  style={{
+                    background: "oklch(0.20 0.012 250)",
+                    borderRadius: "0.625rem",
+                    padding: "0.5rem 0.75rem",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: "0.7rem",
+                      color: "oklch(0.50 0.01 250)",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.05em",
+                      fontWeight: 600,
+                      marginBottom: "0.125rem",
+                    }}
+                  >
+                    Countries
+                  </div>
+                  <div
+                    style={{
+                      fontSize: "1.25rem",
+                      fontWeight: 700,
+                      color:
+                        countriesInTop > 0 ? "oklch(0.65 0.18 165)" : "oklch(0.85 0 0)",
+                      letterSpacing: "-0.03em",
+                    }}
+                  >
+                    {countriesInTop > 0 ? `${countriesInTop} 🌍` : "—"}
+                  </div>
+                </div>
+              </div>
+            </Link>
+
+            {/* Footer */}
+            <div
+              style={{
+                borderTop: "1px solid oklch(1 0 0 / 6%)",
+                padding: "0.5rem 1rem",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <span
+                style={{
+                  fontSize: "0.75rem",
+                  color: "oklch(0.44 0.01 250)",
+                }}
+              >
+                {lastUpdated
+                  ? `${new Date(lastUpdated).toLocaleString("en-US", {
+                      month: "short",
+                      day: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}`
+                  : "No data yet"}
+              </span>
               <UntrackButton appId={app.id} />
             </div>
           </div>
