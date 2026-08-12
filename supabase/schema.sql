@@ -98,7 +98,7 @@ returns table(country_code text, category_id integer) language sql stable as $$
     and array_length(ta.pinned_countries, 1) > 0;
 $$;
 
--- Function: rank mới nhất cho từng (country, chart_type) của 1 app
+-- Function: rank mới nhất cho từng (country, chart_type) của 1 app — chỉ chart OVERALL
 create or replace function get_latest_ranks(target_app_id uuid)
 returns table(
   country_code text,
@@ -113,10 +113,11 @@ returns table(
     rs.captured_at
   from rank_snapshots rs
   where rs.app_id = target_app_id
+    and rs.category_id is null
   order by rs.country_code, rs.chart_type, rs.captured_at desc;
 $$;
 
--- Function: stats tổng hợp cho dashboard (1 query)
+-- Function: stats tổng hợp cho dashboard (1 query) — chỉ chart OVERALL
 create or replace function get_my_apps_stats()
 returns table(
   app_id uuid,
@@ -130,6 +131,7 @@ returns table(
     max(rs.captured_at) as last_updated
   from rank_snapshots rs
   join tracked_apps ta on ta.app_id = rs.app_id
+  where rs.category_id is null
   group by rs.app_id;
 $$;
 

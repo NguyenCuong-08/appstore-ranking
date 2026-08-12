@@ -42,3 +42,7 @@ yarn-error.log*
 next-env.d.ts
 
 dev.log
+dev.err.log
+build.log
+seed.log
+start.log

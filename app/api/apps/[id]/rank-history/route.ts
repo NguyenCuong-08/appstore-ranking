@@ -17,6 +17,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
     .from("rank_snapshots")
     .select("captured_at, rank, country_code, chart_type")
     .eq("app_id", id)
+    .is("category_id", null)
     .gte("captured_at", new Date(Date.now() - days * 86400000).toISOString())
     .order("captured_at", { ascending: true });
 

@@ -1,4 +1,5 @@
 import type { ChartEntry, ChartType, LookupApp } from "./types";
+import { SCAN_COUNTRY_CODES } from "./constants";
 
 const CHART_MAP: Record<string, string> = {
   "top-free": "topfreeapplications",
@@ -39,7 +40,9 @@ interface LookupResult {
   trackId?: number;
   trackName?: string;
   artistName?: string;
+  artworkUrl512?: string;
   artworkUrl100?: string;
+  artworkUrl60?: string;
   primaryGenreId?: number;
   price?: number;
   averageUserRating?: number | null;
@@ -147,13 +150,14 @@ export async function fetchTopCharts({
 }
 
 function mapLookup(result: LookupResult): LookupApp {
+  const icon = result.artworkUrl512 || result.artworkUrl100 || null;
   return {
     trackId: Number(result.trackId),
     trackName: result.trackName || "",
     artistName: result.artistName || "",
-    artworkUrl100: result.artworkUrl100 || null,
+    artworkUrl100: icon,
     primaryGenreId: result.primaryGenreId ?? null,
-    price: Number(result.price) || 0,
+    price: result.price !== undefined ? Number(result.price) : 0,
     averageUserRating: result.averageUserRating ?? null,
     userRatingCount: Number(result.userRatingCount) || 0,
     trackViewUrl: result.trackViewUrl || "",
@@ -161,14 +165,14 @@ function mapLookup(result: LookupResult): LookupApp {
   };
 }
 
-export async function lookupApps(ids: string[]): Promise<LookupApp[]> {
+export async function lookupApps(ids: string[], country = "us"): Promise<LookupApp[]> {
   const uniqueIds = [...new Set(ids.map((i) => String(i).trim()).filter(Boolean))];
   const results: LookupApp[] = [];
   const BATCH = 100;
 
   for (let i = 0; i < uniqueIds.length; i += BATCH) {
     const chunk = uniqueIds.slice(i, i + BATCH);
-    const url = `https://itunes.apple.com/lookup?id=${chunk.join(",")}&country=us`;
+    const url = `https://itunes.apple.com/lookup?id=${chunk.join(",")}&country=${country}`;
     const res = await fetch(url);
     if (!res.ok) {
       throw new Error(`iTunes lookup error: ${res.status}`);
@@ -188,8 +192,58 @@ export async function lookupApps(ids: string[]): Promise<LookupApp[]> {
 }
 
 export async function lookupApp(id: string): Promise<LookupApp | null> {
-  const results = await lookupApps([id]);
-  return results[0] ?? null;
+  // First try US lookup
+  const usResults = await lookupApps([id], "us");
+  let app = usResults[0] ?? null;
+
+  // If rating is missing or count is 0, try Vietnam store lookup for local apps (or default lookup without country)
+  if (!app || !app.averageUserRating || app.userRatingCount === 0) {
+    try {
+      const vnResults = await lookupApps([id], "vn");
+      if (vnResults[0]) {
+        if (!app) {
+          app = vnResults[0];
+        } else if (vnResults[0].userRatingCount > app.userRatingCount) {
+          app = {
+            ...app,
+            averageUserRating: vnResults[0].averageUserRating ?? app.averageUserRating,
+            userRatingCount: vnResults[0].userRatingCount,
+            artistName: vnResults[0].artistName || app.artistName,
+            artworkUrl100: vnResults[0].artworkUrl100 || app.artworkUrl100,
+          };
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // If still missing rating, try global lookup without country parameter
+  if (!app || !app.averageUserRating || app.userRatingCount === 0) {
+    try {
+      const res = await fetch(`https://itunes.apple.com/lookup?id=${id}`);
+      if (res.ok) {
+        const data = await res.json();
+        const raw = data.results?.[0];
+        if (raw) {
+          const globalApp = mapLookup(raw);
+          if (!app) {
+            app = globalApp;
+          } else if (globalApp.userRatingCount > app.userRatingCount) {
+            app = {
+              ...app,
+              averageUserRating: globalApp.averageUserRating ?? app.averageUserRating,
+              userRatingCount: globalApp.userRatingCount,
+            };
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return app;
 }
 
 export async function searchApps(term: string, country = "us"): Promise<LookupApp[]> {
@@ -215,4 +269,90 @@ export function extractAppleId(input: string): string | null {
 
 export function chartPathFor(chart: ChartType): string {
   return CHART_MAP[chart] || CHART_MAP["top-free"];
+}
+
+export interface DiscoveredRank {
+  country_code: string;
+  chart_type: ChartType;
+  rank: number;
+}
+
+/**
+ * Fetch overall top chart (không filter genre) cho 1 quốc gia.
+ * Nguồn chính: Apple Marketing Tools RSS (chỉ hỗ trợ top-free/top-paid),
+ * fallback: legacy iTunes RSS.
+ */
+export async function fetchOverallChart(
+  country: string,
+  chart: ChartType,
+  limit = 100
+): Promise<ChartEntry[]> {
+  const chartPath = CHART_MAP_FALLBACK[chart];
+  if (chartPath) {
+    try {
+      const url = `https://rss.applemarketingtools.com/api/v2/${country}/apps/${chartPath}/${limit}/apps.json`;
+      const res = await fetch(url, { next: { revalidate: 1800 } });
+      if (!res.ok) throw new Error(`Apple Marketing Tools error: ${res.status}`);
+      const data = await res.json();
+      const results = (data.feed?.results ?? []) as FallbackResult[];
+      return results.map((app, idx) => ({
+        rank: idx + 1,
+        id: String(app.id ?? ""),
+        name: app.name || "",
+        developer: app.artistName || "",
+        icon: app.artworkUrl100 || null,
+        url: app.url || "",
+      }));
+    } catch {
+      // fallthrough to legacy endpoint
+    }
+  }
+  return fetchTopCharts({ country, chart, limit });
+}
+
+/**
+ * Quét rank của 1 app trên tất cả các nước × 2 chart (top-free, top-paid),
+ * luôn dùng chart OVERALL (không filter genre). Kết quả sort tăng dần theo rank.
+ * Chạy song song có giới hạn + delay giữa các batch để tránh bị Apple rate-limit.
+ */
+export async function discoverRanksAcrossCountries({
+  appleId,
+  countries = SCAN_COUNTRY_CODES,
+  concurrency = 10,
+}: {
+  appleId: string;
+  countries?: string[];
+  concurrency?: number;
+}): Promise<DiscoveredRank[]> {
+  const charts: ChartType[] = ["top-free", "top-paid"];
+  const tasks: Array<{ country: string; chart: ChartType }> = [];
+  for (const c of countries) {
+    for (const ch of charts) {
+      tasks.push({ country: c, chart: ch });
+    }
+  }
+
+  const results: DiscoveredRank[] = [];
+  let i = 0;
+  while (i < tasks.length) {
+    const batch = tasks.slice(i, i + concurrency);
+    i += concurrency;
+    const settled = await Promise.allSettled(
+      batch.map((t) => fetchOverallChart(t.country, t.chart, 100))
+    );
+    for (let j = 0; j < batch.length; j++) {
+      const t = batch[j];
+      const res = settled[j];
+      if (res.status !== "fulfilled") continue;
+      const entry = res.value.find((e) => String(e.id) === String(appleId));
+      if (entry) {
+        results.push({ country_code: t.country, chart_type: t.chart, rank: entry.rank });
+      }
+    }
+    if (i < tasks.length) await sleep(150);
+  }
+
+  results.sort((a, b) => a.rank - b.rank);
+
+  return results;
 }

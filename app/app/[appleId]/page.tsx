@@ -1,12 +1,10 @@
-import type { Metadata } from "next";
+﻿import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { createDbClient } from "@/lib/supabase/db";
+import { createDbClient, getLatestOverallRanks } from "@/lib/supabase/db";
+import { lookupApp, discoverRanksAcrossCountries } from "@/lib/apple";
+import type { LatestRank } from "@/lib/types";
+import { ToplifyAppDetail } from "@/components/toplify-app-detail";
 import { countryName } from "@/lib/constants";
-import type { ChartType, LatestRank, LatestRankRow } from "@/lib/types";
-import { RankHistoryChart } from "@/components/rank-history-chart";
-import { CountryPicker } from "@/components/country-picker";
-import { AlertManager } from "@/components/alert-manager";
-import { TrackButton } from "@/components/track-button";
 
 export const metadata: Metadata = {
   title: "App Details — Toplify Web",
@@ -18,58 +16,87 @@ interface PageProps {
   params: Promise<{ appleId: string }>;
 }
 
+// Toplify Score (0-100): điểm bình quân theo best rank mỗi quốc gia.
+// Điểm = (100 - bestRank), rank 1 → 99 điểm, rank 100 → 0 điểm. Không tính top-grossing.
 function rankingScore(ranks: LatestRank[]): number | null {
-  const ranked = ranks.filter((r) => r.rank !== null && r.rank !== undefined);
+  const ranked = ranks.filter(
+    (r) => r.chart_type !== "top-grossing" && r.rank !== null && r.rank !== undefined
+  );
   if (ranked.length === 0) return null;
-  const sum = ranked.reduce((acc, r) => acc + (201 - (r.rank as number)), 0);
-  return Math.round((sum / ranked.length) * 100) / 100;
-}
 
-function formatNumber(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
-}
+  const byCountry = new Map<string, number>();
+  for (const r of ranked) {
+    const cur = byCountry.get(r.country_code);
+    if (cur === undefined || (r.rank as number) < cur) {
+      byCountry.set(r.country_code, r.rank as number);
+    }
+  }
 
-function timeAgo(iso: string | null): string {
-  if (!iso) return "—";
-  const diff = Date.now() - new Date(iso).getTime();
-  const hours = Math.floor(diff / 3600000);
-  if (hours < 1) return `${Math.max(0, Math.floor(diff / 60000))}m ago`;
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
-}
-
-function countryFlag(code: string) {
-  const codePoints = code
-    .toUpperCase()
-    .split("")
-    .map((c) => 127397 + c.charCodeAt(0));
-  return String.fromCodePoint(...codePoints);
-}
-
-function getRankColor(rank: number | null): string {
-  if (!rank) return "oklch(0.85 0 0)";
-  if (rank <= 3) return "#fbbf24";
-  if (rank <= 10) return "var(--blue)";
-  if (rank <= 50) return "oklch(0.65 0.18 165)";
-  return "oklch(0.75 0.01 250)";
+  let sum = 0;
+  for (const bestRank of byCountry.values()) {
+    sum += Math.max(0, 100 - bestRank);
+  }
+  return Math.round((sum / byCountry.size) * 10) / 10;
 }
 
 export default async function AppDetailPage({ params }: PageProps) {
   const { appleId } = await params;
   const supabase = createDbClient();
 
-  const { data: app } = await supabase
+  // 1. Fetch app record from DB
+  let { data: app } = await supabase
     .from("apps")
     .select("*")
     .eq("apple_id", appleId)
     .maybeSingle();
 
+  // 2. Auto-enrich missing or nullable app metadata from App Store API
+  const needsEnrichment =
+    !app ||
+    app.rating === null ||
+    app.rating_count === null ||
+    app.rating_count === 0 ||
+    !app.developer ||
+    !app.icon_url ||
+    !app.last_metadata_sync_at;
+
+  if (needsEnrichment) {
+    try {
+      const lookup = await lookupApp(appleId);
+      if (lookup) {
+        const payload = {
+          apple_id: String(lookup.trackId),
+          bundle_id: lookup.bundleId || app?.bundle_id || null,
+          name: lookup.trackName || app?.name || "App",
+          developer: lookup.artistName || app?.developer || null,
+          icon_url: lookup.artworkUrl100 || app?.icon_url || null,
+          primary_category_id: lookup.primaryGenreId || app?.primary_category_id || null,
+          price: lookup.price ?? app?.price ?? 0,
+          rating: lookup.averageUserRating ?? app?.rating ?? null,
+          rating_count: lookup.userRatingCount || app?.rating_count || 0,
+          last_metadata_sync_at: new Date().toISOString(),
+        };
+
+        const { data: upserted } = await supabase
+          .from("apps")
+          .upsert(payload, { onConflict: "apple_id" })
+          .select()
+          .single();
+
+        if (upserted) {
+          app = upserted;
+        }
+      }
+    } catch (err) {
+      console.error("Metadata lookup error:", err);
+    }
+  }
+
   if (!app) {
     notFound();
   }
 
+  // 3. Fetch tracked status & pinned countries
   const { data: ta } = await supabase
     .from("tracked_apps")
     .select("pinned_countries")
@@ -79,17 +106,39 @@ export default async function AppDetailPage({ params }: PageProps) {
   const tracking = Boolean(ta);
   const pinnedCountries: string[] = ta?.pinned_countries ?? [];
 
-  const { data: latestRanks } = await supabase.rpc("get_latest_ranks", {
-    target_app_id: app.id,
-  });
-  const ranks: LatestRank[] = ((latestRanks ?? []) as LatestRankRow[]).map(
-    (r) => ({
-      country_code: r.country_code,
-      chart_type: r.chart_type as ChartType,
-      rank: r.rank,
-      captured_at: r.captured_at,
-    })
+  // 4. Fetch latest ranks from rank_snapshots (chỉ chart overall)
+  let ranks = await getLatestOverallRanks(supabase, app.id);
+
+  // 5. Live ranking discovery across ALL countries × [top-free, top-paid] overall
+  const latestCaptured = ranks.reduce(
+    (max, r) => (r.captured_at ? Math.max(max, new Date(r.captured_at).getTime()) : max),
+    0
   );
+  const STALE_MS = 6 * 3600 * 1000; // 6h
+  const needsDiscovery = ranks.length === 0 || Date.now() - latestCaptured > STALE_MS;
+
+  if (needsDiscovery) {
+    const discovered = await discoverRanksAcrossCountries({
+      appleId: app.apple_id,
+    });
+
+    if (discovered.length > 0) {
+      const snapshotsToInsert = discovered.map((d) => ({
+        app_id: app.id,
+        country_code: d.country_code,
+        category_id: null,
+        chart_type: d.chart_type,
+        rank: d.rank,
+      }));
+
+      for (let i = 0; i < snapshotsToInsert.length; i += 500) {
+        await supabase.from("rank_snapshots").insert(snapshotsToInsert.slice(i, i + 500));
+      }
+    }
+
+    // Re-query ranks from database
+    ranks = await getLatestOverallRanks(supabase, app.id);
+  }
 
   const score = rankingScore(ranks);
   const rankedRows = ranks.filter(
@@ -98,10 +147,6 @@ export default async function AppDetailPage({ params }: PageProps) {
   const countriesInTop = new Set(
     rankedRows.filter((r) => (r.rank as number) <= 200).map((r) => r.country_code)
   ).size;
-  const lastUpdated =
-    ranks.length > 0
-      ? ranks.map((r) => r.captured_at).sort().reverse()[0]
-      : null;
 
   // Group by country
   const byCountry = new Map<
@@ -120,423 +165,33 @@ export default async function AppDetailPage({ params }: PageProps) {
     }
     byCountry.set(r.country_code, row);
   }
+
   const countryRanks = [...byCountry.entries()]
     .map(([code, row]) => ({ code, ...row }))
     .filter((r) => r.best !== null)
-    .sort((a, b) => (a.best ?? 999) - (b.best ?? 999));
-
-  const stats = [
-    {
-      label: "Rating",
-      value: app.rating !== null ? app.rating.toFixed(1) : "—",
-      sub: "out of 5",
-      accent: false,
-    },
-    {
-      label: "Reviews",
-      value: app.rating_count ? formatNumber(app.rating_count) : "—",
-      sub: "total",
-      accent: false,
-    },
-    {
-      label: "Countries",
-      value: String(countriesInTop),
-      sub: "in Top 200",
-      accent: countriesInTop > 0,
-    },
-    {
-      label: "Score",
-      value: score !== null ? String(score) : "—",
-      sub: "ranking score",
-      accent: false,
-    },
-    {
-      label: "Updated",
-      value: timeAgo(lastUpdated),
-      sub: "last sync",
-      accent: false,
-    },
-    {
-      label: "Price",
-      value: app.price === 0 ? "Free" : `$${app.price}`,
-      sub: app.price === 0 ? "No cost" : "paid app",
-      accent: false,
-    },
-  ];
+    .sort(
+      (a, b) =>
+        (a.best ?? 999) - (b.best ?? 999) ||
+        countryName(a.code).localeCompare(countryName(b.code))
+    );
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
-      {/* App Header Card */}
-      <div
-        style={{
-          background: "oklch(0.16 0.012 250)",
-          border: "1px solid oklch(1 0 0 / 7%)",
-          borderRadius: "1rem",
-          padding: "1.25rem",
-          display: "flex",
-          alignItems: "flex-start",
-          gap: "1rem",
-          flexWrap: "wrap",
-        }}
-      >
-        {app.icon_url ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={app.icon_url}
-            alt=""
-            width={80}
-            height={80}
-            style={{
-              borderRadius: "1.125rem",
-              flexShrink: 0,
-              border: "1px solid oklch(1 0 0 / 8%)",
-              boxShadow: "0 4px 16px rgba(0,0,0,0.3)",
-            }}
-          />
-        ) : (
-          <div
-            style={{
-              width: 80,
-              height: 80,
-              borderRadius: "1.125rem",
-              background: "oklch(0.22 0.012 250)",
-              flexShrink: 0,
-            }}
-          />
-        )}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <h1
-            style={{
-              fontSize: "1.5rem",
-              fontWeight: 700,
-              letterSpacing: "-0.03em",
-              color: "oklch(0.97 0 0)",
-              margin: "0 0 0.25rem",
-              lineHeight: 1.2,
-            }}
-          >
-            {app.name}
-          </h1>
-          <p
-            style={{
-              fontSize: "0.9375rem",
-              color: "oklch(0.60 0.01 250)",
-              margin: "0 0 0.625rem",
-            }}
-          >
-            {app.developer}
-          </p>
-          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.5rem" }}>
-            <span
-              style={{
-                background: app.price === 0 ? "oklch(0.65 0.18 165 / 15%)" : "var(--blue-dim)",
-                color: app.price === 0 ? "oklch(0.65 0.18 165)" : "var(--blue)",
-                border: `1px solid ${app.price === 0 ? "oklch(0.65 0.18 165 / 30%)" : "rgba(59,130,246,0.3)"}`,
-                borderRadius: "999px",
-                padding: "0.1875rem 0.625rem",
-                fontSize: "0.8125rem",
-                fontWeight: 600,
-              }}
-            >
-              {app.price === 0 ? "Free" : `$${app.price}`}
-            </span>
-            <span
-              style={{
-                fontSize: "0.8125rem",
-                color: "oklch(0.44 0.01 250)",
-              }}
-            >
-              ID {app.apple_id}
-            </span>
-            <a
-              href={`https://apps.apple.com/app/id${app.apple_id}`}
-              target="_blank"
-              rel="noreferrer"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "0.25rem",
-                fontSize: "0.8125rem",
-                color: "var(--blue)",
-                textDecoration: "none",
-                fontWeight: 500,
-              }}
-            >
-              <svg
-                width="11"
-                height="11"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-                <polyline points="15 3 21 3 21 9" />
-                <line x1="10" y1="14" x2="21" y2="3" />
-              </svg>
-              App Store
-            </a>
-          </div>
-        </div>
-
-        {!tracking && <TrackButton appId={app.id} />}
-      </div>
-
-      {/* Stats grid */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(3, 1fr)",
-          gap: "0.625rem",
-        }}
-      >
-        {stats.map((stat) => (
-          <div
-            key={stat.label}
-            style={{
-              background: "oklch(0.16 0.012 250)",
-              border: "1px solid oklch(1 0 0 / 7%)",
-              borderRadius: "0.875rem",
-              padding: "0.875rem 1rem",
-            }}
-          >
-            <div
-              style={{
-                fontSize: "0.6875rem",
-                color: "oklch(0.50 0.01 250)",
-                textTransform: "uppercase",
-                letterSpacing: "0.06em",
-                fontWeight: 600,
-                marginBottom: "0.25rem",
-              }}
-            >
-              {stat.label}
-            </div>
-            <div
-              style={{
-                fontSize: "1.5rem",
-                fontWeight: 700,
-                letterSpacing: "-0.03em",
-                color: stat.accent ? "oklch(0.65 0.18 165)" : "oklch(0.92 0 0)",
-                lineHeight: 1,
-              }}
-            >
-              {stat.value}
-            </div>
-            <div
-              style={{
-                fontSize: "0.75rem",
-                color: "oklch(0.44 0.01 250)",
-                marginTop: "0.25rem",
-              }}
-            >
-              {stat.sub}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* Pinned countries (if tracking) */}
-      {tracking && (
-        <CountryPicker appId={app.id} initialPinned={pinnedCountries} />
-      )}
-
-      {/* Ranking history chart */}
-      <section
-        style={{
-          background: "oklch(0.16 0.012 250)",
-          border: "1px solid oklch(1 0 0 / 7%)",
-          borderRadius: "1rem",
-          padding: "1.25rem",
-        }}
-      >
-        <h2
-          style={{
-            fontSize: "1rem",
-            fontWeight: 700,
-            letterSpacing: "-0.02em",
-            color: "oklch(0.97 0 0)",
-            margin: "0 0 1rem",
-          }}
-        >
-          Ranking History
-        </h2>
-        <RankHistoryChart appId={app.id} pinnedCountries={pinnedCountries} />
-      </section>
-
-      {/* Country ranking table */}
-      {countryRanks.length > 0 && (
-        <section
-          style={{
-            background: "oklch(0.16 0.012 250)",
-            border: "1px solid oklch(1 0 0 / 7%)",
-            borderRadius: "1rem",
-            overflow: "hidden",
-          }}
-        >
-          <div style={{ padding: "1rem 1.25rem", borderBottom: "1px solid oklch(1 0 0 / 6%)" }}>
-            <h2
-              style={{
-                fontSize: "1rem",
-                fontWeight: 700,
-                letterSpacing: "-0.02em",
-                color: "oklch(0.97 0 0)",
-                margin: 0,
-              }}
-            >
-              Rankings by Country
-            </h2>
-            <p
-              style={{
-                fontSize: "0.8125rem",
-                color: "oklch(0.50 0.01 250)",
-                margin: "0.25rem 0 0",
-              }}
-            >
-              Current positions · Top 200 · {countryRanks.length} countries
-            </p>
-          </div>
-          <div
-            style={{ maxHeight: "480px", overflowY: "auto" }}
-            className="app-list-scroll"
-          >
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.875rem" }}>
-              <thead>
-                <tr
-                  style={{
-                    position: "sticky",
-                    top: 0,
-                    background: "oklch(0.18 0.012 250)",
-                    zIndex: 1,
-                  }}
-                >
-                  <th
-                    style={{
-                      padding: "0.625rem 1.25rem",
-                      textAlign: "left",
-                      fontWeight: 600,
-                      fontSize: "0.75rem",
-                      color: "oklch(0.50 0.01 250)",
-                      textTransform: "uppercase",
-                      letterSpacing: "0.05em",
-                    }}
-                  >
-                    Country
-                  </th>
-                  <th
-                    style={{
-                      padding: "0.625rem 1rem",
-                      textAlign: "right",
-                      fontWeight: 600,
-                      fontSize: "0.75rem",
-                      color: "oklch(0.50 0.01 250)",
-                      textTransform: "uppercase",
-                      letterSpacing: "0.05em",
-                    }}
-                  >
-                    Free
-                  </th>
-                  <th
-                    style={{
-                      padding: "0.625rem 1rem",
-                      textAlign: "right",
-                      fontWeight: 600,
-                      fontSize: "0.75rem",
-                      color: "oklch(0.50 0.01 250)",
-                      textTransform: "uppercase",
-                      letterSpacing: "0.05em",
-                    }}
-                  >
-                    Paid
-                  </th>
-                  <th
-                    style={{
-                      padding: "0.625rem 1.25rem",
-                      textAlign: "right",
-                      fontWeight: 600,
-                      fontSize: "0.75rem",
-                      color: "oklch(0.50 0.01 250)",
-                      textTransform: "uppercase",
-                      letterSpacing: "0.05em",
-                    }}
-                  >
-                    Best
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {countryRanks.map((r, idx) => (
-                  <tr
-                    key={r.code}
-                    style={{
-                      borderTop: "1px solid oklch(1 0 0 / 4%)",
-                      background: pinnedCountries.includes(r.code)
-                        ? "var(--blue-subtle)"
-                        : idx % 2 === 0
-                        ? "transparent"
-                        : "oklch(1 0 0 / 1.5%)",
-                    }}
-                  >
-                    <td
-                      style={{
-                        padding: "0.625rem 1.25rem",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "0.5rem",
-                        fontWeight: 500,
-                      }}
-                    >
-                      <span style={{ fontSize: "1.1rem" }}>{countryFlag(r.code)}</span>
-                      <span
-                        style={{
-                          textTransform: "uppercase",
-                          letterSpacing: "0.04em",
-                          fontSize: "0.8rem",
-                          fontWeight: 700,
-                          color: "oklch(0.75 0.01 250)",
-                        }}
-                      >
-                        {r.code}
-                      </span>
-                      <span style={{ color: "oklch(0.65 0.01 250)", fontSize: "0.875rem", fontWeight: 400 }}>
-                        {countryName(r.code)}
-                      </span>
-                      {pinnedCountries.includes(r.code) && (
-                        <span
-                          style={{
-                            background: "var(--blue-dim)",
-                            color: "var(--blue)",
-                            borderRadius: "999px",
-                            padding: "0 0.375rem",
-                            fontSize: "0.65rem",
-                            fontWeight: 700,
-                            letterSpacing: "0.04em",
-                          }}
-                        >
-                          PINNED
-                        </span>
-                      )}
-                    </td>
-                    <td style={{ padding: "0.625rem 1rem", textAlign: "right", fontWeight: 700, color: getRankColor(r.free) }}>
-                      {r.free !== null ? `#${r.free}` : "—"}
-                    </td>
-                    <td style={{ padding: "0.625rem 1rem", textAlign: "right", fontWeight: 700, color: getRankColor(r.paid) }}>
-                      {r.paid !== null ? `#${r.paid}` : "—"}
-                    </td>
-                    <td style={{ padding: "0.625rem 1.25rem", textAlign: "right", fontWeight: 700, color: getRankColor(r.best) }}>
-                      {r.best !== null ? `#${r.best}` : "—"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
-
-      {tracking && <AlertManager appId={app.id} />}
-    </div>
+    <ToplifyAppDetail
+      app={{
+        id: app.id,
+        apple_id: app.apple_id,
+        name: app.name,
+        developer: app.developer,
+        icon_url: app.icon_url,
+        price: app.price,
+        rating: app.rating,
+        rating_count: app.rating_count,
+      }}
+      tracking={tracking}
+      pinnedCountries={pinnedCountries}
+      countryRanks={countryRanks}
+      score={score}
+      countriesInTop={countriesInTop}
+    />
   );
 }

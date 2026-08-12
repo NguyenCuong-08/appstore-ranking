@@ -168,13 +168,50 @@ export default async function MyAppsPage() {
 
   const appIds = tracked.map((t) => t.app_id);
 
-  const [{ data: apps }, { data: statsRaw }] = await Promise.all([
+  const [{ data: apps }, { data: snapshots }] = await Promise.all([
     supabase.from("apps").select("*").in("id", appIds),
-    supabase.rpc("get_my_apps_stats"),
+    supabase
+      .from("rank_snapshots")
+      .select("app_id, country_code, rank, captured_at")
+      .in("app_id", appIds)
+      .is("category_id", null),
   ]);
 
-  const statsById = new Map(
-    ((statsRaw ?? []) as AppStats[]).map((s) => [s.app_id, s])
+  // Aggregate stats per app từ snapshot chart overall (category_id null)
+  interface Agg {
+    best_rank: number | null;
+    countries: Set<string>;
+    last_updated: string | null;
+  }
+  const aggById = new Map<string, Agg>();
+  for (const s of snapshots ?? []) {
+    const agg = aggById.get(s.app_id) ?? {
+      best_rank: null as number | null,
+      countries: new Set<string>(),
+      last_updated: null as string | null,
+    };
+    if (s.rank !== null && s.rank !== undefined) {
+      if (agg.best_rank === null || (s.rank as number) < agg.best_rank) {
+        agg.best_rank = s.rank as number;
+      }
+      if ((s.rank as number) <= 200) agg.countries.add(s.country_code);
+    }
+    if (s.captured_at && (agg.last_updated === null || s.captured_at > agg.last_updated)) {
+      agg.last_updated = s.captured_at;
+    }
+    aggById.set(s.app_id, agg);
+  }
+
+  const statsById = new Map<string, AppStats>(
+    [...aggById.entries()].map(([app_id, agg]) => [
+      app_id,
+      {
+        app_id,
+        best_rank: agg.best_rank,
+        countries_in_top: agg.countries.size,
+        last_updated: agg.last_updated,
+      },
+    ])
   );
 
   const rows = ((apps ?? []) as App[])

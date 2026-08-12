@@ -25,58 +25,69 @@ export async function POST(request: NextRequest) {
 
   const { data: existing } = await supabase
     .from("apps")
-    .select("id, apple_id, name")
+    .select("*")
     .eq("apple_id", appleId)
     .maybeSingle();
 
   let app = existing;
 
-  if (!app) {
+  // Always perform lookup if app doesn't exist or if metadata is incomplete/stale
+  const needsLookup =
+    !app ||
+    app.rating === null ||
+    app.rating_count === null ||
+    app.rating_count === 0 ||
+    !app.developer ||
+    !app.icon_url;
+
+  if (needsLookup) {
     let lookup;
     try {
       lookup = await lookupApp(appleId);
     } catch (err) {
-      return NextResponse.json(
-        { error: "Failed to reach iTunes", detail: (err as Error).message },
-        { status: 502 }
-      );
+      if (!app) {
+        return NextResponse.json(
+          { error: "Failed to reach iTunes", detail: (err as Error).message },
+          { status: 502 }
+        );
+      }
     }
 
-    if (!lookup) {
-      return NextResponse.json({ error: "App not found on App Store" }, { status: 404 });
-    }
+    if (lookup) {
+      const payload = {
+        apple_id: String(lookup.trackId),
+        bundle_id: lookup.bundleId || app?.bundle_id || null,
+        name: lookup.trackName || app?.name || "App",
+        developer: lookup.artistName || app?.developer || null,
+        icon_url: lookup.artworkUrl100 || app?.icon_url || null,
+        primary_category_id: lookup.primaryGenreId || app?.primary_category_id || null,
+        price: lookup.price ?? app?.price ?? 0,
+        rating: lookup.averageUserRating ?? app?.rating ?? null,
+        rating_count: lookup.userRatingCount || app?.rating_count || 0,
+        last_metadata_sync_at: new Date().toISOString(),
+      };
 
-    const { data: inserted, error: appErr } = await supabase
-      .from("apps")
-      .upsert(
-        {
-          apple_id: String(lookup.trackId),
-          bundle_id: lookup.bundleId,
-          name: lookup.trackName,
-          developer: lookup.artistName,
-          icon_url: lookup.artworkUrl100,
-          primary_category_id: lookup.primaryGenreId,
-          price: lookup.price,
-          rating: lookup.averageUserRating,
-          rating_count: lookup.userRatingCount,
-          last_metadata_sync_at: new Date().toISOString(),
-        },
-        { onConflict: "apple_id" }
-      )
-      .select()
-      .single();
+      const { data: upserted, error: appErr } = await supabase
+        .from("apps")
+        .upsert(payload, { onConflict: "apple_id" })
+        .select()
+        .single();
 
-    if (appErr) {
-      return NextResponse.json(
-        { error: "Failed to save app", detail: appErr.message },
-        { status: 500 }
-      );
+      if (appErr && !app) {
+        return NextResponse.json(
+          { error: "Failed to save app", detail: appErr.message },
+          { status: 500 }
+        );
+      }
+
+      if (upserted) {
+        app = upserted;
+      }
     }
-    app = inserted;
   }
 
   if (!app) {
-    return NextResponse.json({ error: "Failed to save app" }, { status: 500 });
+    return NextResponse.json({ error: "App not found on App Store" }, { status: 404 });
   }
 
   const { error: trackErr } = await supabase.from("tracked_apps").upsert(

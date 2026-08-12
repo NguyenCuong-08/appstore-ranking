@@ -119,20 +119,20 @@ export function resolveGenreId(category: string): number | undefined {
 }
 
 export const COUNTRY_NAMES: Record<string, string> = {
-  ad: "Andorra", ae: "United Arab Emirates", ag: "Antigua and Barbuda",
+  ae: "United Arab Emirates", af: "Afghanistan", ag: "Antigua and Barbuda",
   ai: "Anguilla", al: "Albania", am: "Armenia", ao: "Angola", ar: "Argentina",
-  as: "American Samoa", at: "Austria", au: "Australia", aw: "Aruba", az: "Azerbaijan",
-  bb: "Barbados", bd: "Bangladesh", be: "Belgium", bf: "Burkina Faso", bg: "Bulgaria",
+  at: "Austria", au: "Australia", az: "Azerbaijan",
+  ba: "Bosnia and Herzegovina", bb: "Barbados", be: "Belgium", bf: "Burkina Faso", bg: "Bulgaria",
   bh: "Bahrain", bj: "Benin", bm: "Bermuda", bn: "Brunei", bo: "Bolivia",
   br: "Brazil", bs: "Bahamas", bt: "Bhutan", bw: "Botswana", by: "Belarus",
-  bz: "Belize", ca: "Canada", cg: "Congo", ch: "Switzerland", cl: "Chile",
+  bz: "Belize", ca: "Canada", cd: "Congo DR", cg: "Congo", ch: "Switzerland", ci: "Côte d'Ivoire", cl: "Chile",
   cm: "Cameroon", cn: "China", co: "Colombia", cr: "Costa Rica", cv: "Cape Verde",
   cy: "Cyprus", cz: "Czechia", de: "Germany", dk: "Denmark", dm: "Dominica",
   do: "Dominican Republic", dz: "Algeria", ec: "Ecuador", ee: "Estonia",
   eg: "Egypt", es: "Spain", fi: "Finland", fj: "Fiji", fm: "Micronesia",
   fr: "France", ga: "Gabon", gb: "United Kingdom", gd: "Grenada", ge: "Georgia",
   gh: "Ghana", gm: "Gambia", gr: "Greece", gt: "Guatemala", gw: "Guinea-Bissau",
-  gy: "Guyana", hk: "Hong Kong", hn: "Honduras", hr: "Croatia", ht: "Haiti",
+  gy: "Guyana", hk: "Hong Kong", hn: "Honduras", hr: "Croatia",
   hu: "Hungary", id: "Indonesia", ie: "Ireland", il: "Israel", in: "India",
   iq: "Iraq", is: "Iceland", it: "Italy", jm: "Jamaica", jo: "Jordan",
   jp: "Japan", ke: "Kenya", kg: "Kyrgyzstan", kh: "Cambodia", kn: "Saint Kitts and Nevis",
@@ -149,17 +149,26 @@ export const COUNTRY_NAMES: Record<string, string> = {
   pt: "Portugal", pw: "Palau", py: "Paraguay", qa: "Qatar", ro: "Romania",
   rs: "Serbia", ru: "Russia", rw: "Rwanda", sa: "Saudi Arabia", sb: "Solomon Islands",
   sc: "Seychelles", se: "Sweden", sg: "Singapore", si: "Slovenia", sk: "Slovakia",
-  sl: "Sierra Leone", sm: "San Marino", sn: "Senegal", sr: "Suriname", st: "Sao Tome and Principe",
+  sl: "Sierra Leone", sn: "Senegal", sr: "Suriname", st: "Sao Tome and Principe",
   sv: "El Salvador", sz: "Eswatini", tc: "Turks and Caicos", td: "Chad", th: "Thailand",
   tj: "Tajikistan", tm: "Turkmenistan", tn: "Tunisia", to: "Tonga", tr: "Turkey",
   tt: "Trinidad and Tobago", tw: "Taiwan", tz: "Tanzania", ua: "Ukraine",
   ug: "Uganda", us: "United States", uy: "Uruguay", uz: "Uzbekistan",
-  vc: "Saint Vincent and the Grenadines", ve: "Venezuela", vi: "U.S. Virgin Islands",
-  vn: "Vietnam", vu: "Vanuatu", ws: "Samoa", ye: "Yemen", za: "South Africa",
-  zw: "Zimbabwe",
+  vc: "Saint Vincent and the Grenadines", ve: "Venezuela", vg: "British Virgin Islands",
+  vn: "Vietnam", vu: "Vanuatu", xk: "Kosovo", ye: "Yemen", za: "South Africa",
+  zm: "Zambia", zw: "Zimbabwe",
 };
 
 export const COUNTRY_CODES = Object.keys(COUNTRY_NAMES);
+
+// Nước không có App Store riêng → Apple RSS trả lỗi 400 hoặc empty, bỏ qua khi quét
+export const COUNTRY_CODES_EXCLUDED: string[] = [
+  "aw", "ht", "as", "sm", "vi", "bd", "ws", "ad",
+];
+
+export const SCAN_COUNTRY_CODES = COUNTRY_CODES.filter(
+  (c) => !COUNTRY_CODES_EXCLUDED.includes(c)
+);
 
 export const COUNTRIES = COUNTRY_CODES.map((code) => ({
   code,

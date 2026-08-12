@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createDbClient } from "@/lib/supabase/db";
+import { createDbClient, getLatestOverallRanks } from "@/lib/supabase/db";
 import { COUNTRY_CODES } from "@/lib/constants";
-import type { LatestRank, LatestRankRow } from "@/lib/types";
+import type { LatestRank } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -21,25 +21,7 @@ export async function GET(_request: NextRequest, context: RouteContext) {
     return NextResponse.json({ error: "App not found" }, { status: 404 });
   }
 
-  const { data: latestRaw, error: snapErr } = await supabase.rpc(
-    "get_latest_ranks",
-    { target_app_id: id }
-  );
-  if (snapErr) {
-    return NextResponse.json(
-      { error: "Failed to load ranks", detail: snapErr.message },
-      { status: 500 }
-    );
-  }
-
-  const latestRanks: LatestRank[] = ((latestRaw ?? []) as LatestRankRow[]).map(
-    (r) => ({
-      country_code: r.country_code,
-      chart_type: r.chart_type,
-      rank: r.rank,
-      captured_at: r.captured_at,
-    })
-  );
+  const latestRanks: LatestRank[] = await getLatestOverallRanks(supabase, id);
 
   const { data: ta } = await supabase
     .from("tracked_apps")
