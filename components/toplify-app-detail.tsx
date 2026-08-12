@@ -126,31 +126,19 @@ export function ToplifyAppDetail({
   const [discovering, setDiscovering] = useState<boolean>(false);
   const PAGE_SIZE = 15;
 
-  // Auto-trigger rank discovery 2 pha:
-  // Pha 1 (quick): quét 24 nước ưu tiên → refresh trang nhanh để show data sớm.
-  // Pha 2 (full):  quét toàn bộ ~160 nước → refresh lần 2 để show đầy đủ như Toplify app.
+  // Auto-trigger rank discovery siêu tốc cho toàn bộ ~160 nước
   const runDiscovery = useCallback(async () => {
     if (!needsDiscovery) return;
     setDiscovering(true);
     try {
-      // Pha 1: Quick scan (24 priority countries)
-      const res1 = await fetch(`/api/apps/${app.id}/discover`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apple_id: app.apple_id, full: false }),
-      });
-      if (res1.ok) {
-        router.refresh(); // Hiện data priority countries trước
-      }
-
-      // Pha 2: Full scan tất cả ~160 nước (chạy tiếp, không block UI)
-      const res2 = await fetch(`/api/apps/${app.id}/discover`, {
+      const res = await fetch(`/api/apps/${app.id}/discover`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ apple_id: app.apple_id, full: true, force: true }),
       });
-      if (res2.ok) {
-        router.refresh(); // Cập nhật đầy đủ toàn bộ countries
+      if (res.ok) {
+        setDiscovering(false);
+        router.refresh();
       }
     } catch (err) {
       console.error("[discover] error:", err);

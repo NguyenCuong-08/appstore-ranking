@@ -364,7 +364,7 @@ export async function discoverRanksAcrossCountries({
   appleId,
   genreId,
   countries = SCAN_COUNTRY_CODES,
-  concurrency = 10,
+  concurrency = 25,
 }: {
   appleId: string;
   genreId?: number | null;
@@ -407,7 +407,7 @@ export async function discoverRanksAcrossCountries({
         });
       }
     }
-    if (i < tasks.length) await sleep(120);
+    if (i < tasks.length) await sleep(50);
   }
 
   results.sort((a, b) => a.rank - b.rank);
