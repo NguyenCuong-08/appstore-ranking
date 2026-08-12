@@ -5,6 +5,7 @@ import Link from "next/link";
 import { COUNTRIES, CHARTS, CHART_LABELS, countryName } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import type { ChartEntry } from "@/lib/types";
+import { CountryFlag } from "@/components/country-flag";
 
 const CATEGORIES = [
   { value: "all", label: "All Categories" },
@@ -51,15 +52,6 @@ const CATEGORIES = [
   { value: "games-trivia", label: "Games › Trivia" },
   { value: "games-word", label: "Games › Word" },
 ];
-
-// Country flag from ISO code using emoji
-function countryFlag(code: string) {
-  const codePoints = code
-    .toUpperCase()
-    .split("")
-    .map((c) => 127397 + c.charCodeAt(0));
-  return String.fromCodePoint(...codePoints);
-}
 
 interface ChartResponse {
   country: string;
@@ -265,7 +257,7 @@ export function ExploreControls() {
             }}
           >
             <span style={{ fontSize: "1.1rem" }}>
-              {countryFlag(country)}
+              <CountryFlag code={country} width={18} height={13} />
             </span>
             <span>{currentCountry?.name ?? country.toUpperCase()}</span>
             <svg
@@ -357,7 +349,9 @@ export function ExploreControls() {
                       transition: "background 100ms",
                     }}
                   >
-                    <span style={{ fontSize: "1rem" }}>{countryFlag(c.code)}</span>
+                    <span style={{ fontSize: "1rem" }}>
+                      <CountryFlag code={c.code} width={18} height={13} />
+                    </span>
                     <span style={{ flex: 1 }}>{c.name}</span>
                     <span
                       style={{
@@ -592,7 +586,9 @@ export function ExploreControls() {
               gap: "0.5rem",
             }}
           >
-            <span>{countryFlag(meta.country)}</span>
+            <span>
+              <CountryFlag code={meta.country} width={16} height={11} />
+            </span>
             <span>{countryName(meta.country)}</span>
             <span style={{ opacity: 0.4 }}>·</span>
             <span>

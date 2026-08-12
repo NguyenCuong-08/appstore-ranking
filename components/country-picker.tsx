@@ -3,14 +3,7 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import { COUNTRIES } from "@/lib/constants";
-
-function countryFlag(code: string) {
-  const codePoints = code
-    .toUpperCase()
-    .split("")
-    .map((c) => 127397 + c.charCodeAt(0));
-  return String.fromCodePoint(...codePoints);
-}
+import { CountryFlag } from "@/components/country-flag";
 
 export function CountryPicker({
   appId,
@@ -146,7 +139,7 @@ export function CountryPicker({
                   transition: "all 100ms ease",
                 }}
               >
-                <span>{countryFlag(c.code)}</span>
+                <CountryFlag code={c.code} width={18} height={13} />
                 <span>{c.code}</span>
               </button>
             );

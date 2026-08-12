@@ -1,6 +1,5 @@
 {
   "crons": [
-    { "path": "/api/cron/sync-ranks", "schedule": "0 3 * * *" },
-    { "path": "/api/cron/sync-metadata", "schedule": "0 4 * * *" }
+    { "path": "/api/cron/sync", "schedule": "0 */6 * * *" }
   ]
 }

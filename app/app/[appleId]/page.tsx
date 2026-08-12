@@ -1,7 +1,7 @@
-﻿import type { Metadata } from "next";
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { createDbClient, getLatestOverallRanks } from "@/lib/supabase/db";
-import { lookupApp, discoverRanksAcrossCountries } from "@/lib/apple";
+import { lookupApp } from "@/lib/apple";
 import type { LatestRank } from "@/lib/types";
 import { ToplifyAppDetail } from "@/components/toplify-app-detail";
 import { countryName } from "@/lib/constants";
@@ -50,7 +50,8 @@ export default async function AppDetailPage({ params }: PageProps) {
     .eq("apple_id", appleId)
     .maybeSingle();
 
-  // 2. Auto-enrich missing or nullable app metadata from App Store API
+  // 2. Auto-enrich missing or nullable app metadata từ App Store API.
+  //    Giữ nguyên nhưng chỉ dùng lookupApp 1 lần (đã có retry logic trong apple.ts).
   const needsEnrichment =
     !app ||
     app.rating === null ||
@@ -106,68 +107,67 @@ export default async function AppDetailPage({ params }: PageProps) {
   const tracking = Boolean(ta);
   const pinnedCountries: string[] = ta?.pinned_countries ?? [];
 
-  // 4. Fetch latest ranks from rank_snapshots (chỉ chart overall)
-  let ranks = await getLatestOverallRanks(supabase, app.id);
+  // 4. Fetch latest ranks từ DB (không block để discovery hoàn tất)
+  const ranks = await getLatestOverallRanks(supabase, app.id);
 
-  // 5. Live ranking discovery across ALL countries × [top-free, top-paid] overall
+  // 5. Kiểm tra xem data có cần discovery mới không (stale > 6h hoặc chưa có rank nào)
   const latestCaptured = ranks.reduce(
-    (max, r) => (r.captured_at ? Math.max(max, new Date(r.captured_at).getTime()) : max),
+    (max, r) =>
+      r.captured_at ? Math.max(max, new Date(r.captured_at).getTime()) : max,
     0
   );
-  const STALE_MS = 6 * 3600 * 1000; // 6h
-  const needsDiscovery = ranks.length === 0 || Date.now() - latestCaptured > STALE_MS;
+  const STALE_MS = 6 * 3600 * 1000;
+  const needsDiscovery = ranks.length < 4 || Date.now() - latestCaptured > STALE_MS;
 
-  if (needsDiscovery) {
-    const discovered = await discoverRanksAcrossCountries({
-      appleId: app.apple_id,
-    });
-
-    if (discovered.length > 0) {
-      const snapshotsToInsert = discovered.map((d) => ({
-        app_id: app.id,
-        country_code: d.country_code,
-        category_id: null,
-        chart_type: d.chart_type,
-        rank: d.rank,
-      }));
-
-      for (let i = 0; i < snapshotsToInsert.length; i += 500) {
-        await supabase.from("rank_snapshots").insert(snapshotsToInsert.slice(i, i + 500));
-      }
-    }
-
-    // Re-query ranks from database
-    ranks = await getLatestOverallRanks(supabase, app.id);
-  }
-
+  // 6. Tính score & group by country từ data hiện có trong DB
   const score = rankingScore(ranks);
   const rankedRows = ranks.filter(
     (r) => r.rank !== null && r.rank !== undefined
   );
+  // Đếm TẤT CẢ countries có rank (không filter theo ngưỡng) vì scan lấy top 100
+  // nên mọi rank trong DB đều hợp lệ và cần đếm hết.
   const countriesInTop = new Set(
-    rankedRows.filter((r) => (r.rank as number) <= 200).map((r) => r.country_code)
+    rankedRows.map((r) => r.country_code)
   ).size;
 
-  // Group by country
+  // Group by country — tính best rank hiện tại và best rank trước đó cho mỗi nước
   const byCountry = new Map<
     string,
-    { free: number | null; paid: number | null; grossing: number | null; best: number | null }
+    {
+      free: number | null; paid: number | null; grossing: number | null;
+      best: number | null; prevBest: number | null;
+    }
   >();
   for (const r of ranks) {
     const row =
       byCountry.get(r.country_code) ??
-      { free: null, paid: null, grossing: null, best: null };
+      { free: null, paid: null, grossing: null, best: null, prevBest: null };
+
     if (r.chart_type === "top-free") row.free = r.rank;
     else if (r.chart_type === "top-paid") row.paid = r.rank;
     else row.grossing = r.rank;
+
+    // best rank hiện tại
     if (r.rank !== null && r.rank !== undefined) {
       row.best = row.best === null ? r.rank : Math.min(row.best, r.rank);
     }
+    // best rank trước đó (prev_rank)
+    if (r.prev_rank !== null && r.prev_rank !== undefined) {
+      row.prevBest = row.prevBest === null ? r.prev_rank : Math.min(row.prevBest, r.prev_rank);
+    }
+
     byCountry.set(r.country_code, row);
   }
 
   const countryRanks = [...byCountry.entries()]
-    .map(([code, row]) => ({ code, ...row }))
+    .map(([code, row]) => {
+      // rankChange = prevBest - best  (dương = tăng hạng, âm = tụt hạng, null = chưa có lịch sử)
+      const rankChange =
+        row.prevBest !== null && row.best !== null
+          ? row.prevBest - row.best
+          : null;
+      return { code, free: row.free, paid: row.paid, grossing: row.grossing, best: row.best, rankChange };
+    })
     .filter((r) => r.best !== null)
     .sort(
       (a, b) =>
@@ -192,6 +192,7 @@ export default async function AppDetailPage({ params }: PageProps) {
       countryRanks={countryRanks}
       score={score}
       countriesInTop={countriesInTop}
+      needsDiscovery={needsDiscovery}
     />
   );
 }

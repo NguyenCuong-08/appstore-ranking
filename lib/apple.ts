@@ -10,10 +10,57 @@ const CHART_MAP: Record<string, string> = {
 const CHART_MAP_FALLBACK: Record<string, string> = {
   "top-free": "top-free",
   "top-paid": "top-paid",
-  "top-grossing": "top-grossing",
 };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+const UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+
+// Fetch với timeout + retry cho các lỗi tạm thời (timeout, 429, 5xx).
+// Apple hay rate-limit/throttle các endpoint public → không được để 1 request
+// treo lâu hoặc fail tạm thời làm mất dữ liệu cả trang.
+async function fetchWithRetry(
+  url: string,
+  init?: RequestInit,
+  { timeoutMs = 12000, retries = 2, delayMs = 700 }: { timeoutMs?: number; retries?: number; delayMs?: number } = {}
+): Promise<Response> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, {
+        ...init,
+        headers: {
+          "User-Agent": UA,
+          Accept: "application/json",
+          ...(init?.headers ?? {}),
+        },
+        signal: controller.signal,
+        cache: "no-store",
+      });
+      // 408/429/5xx là lỗi tạm thời có thể retry; 403 là bị chặn hẳn, không retry.
+      if (res.status === 408 || res.status === 429 || res.status >= 500) {
+        lastErr = new Error(`Apple HTTP ${res.status}`);
+        if (attempt < retries) {
+          await sleep(delayMs * (attempt + 1));
+          continue;
+        }
+      }
+      return res;
+    } catch (err) {
+      lastErr = err;
+      if (attempt < retries) {
+        await sleep(delayMs * (attempt + 1));
+        continue;
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastErr ?? new Error(`Failed to fetch ${url}`);
+}
 
 interface LegacyImage {
   label?: string;
@@ -85,10 +132,7 @@ async function fetchLegacy({
     url = `https://itunes.apple.com/${country}/rss/${chartPath}/limit=${limit}/genre=${genreId}/json`;
   }
 
-  const res = await fetch(url, { next: { revalidate: 1800 } });
-  if (!res.ok) {
-    throw new Error(`Apple RSS error: ${res.status}`);
-  }
+  const res = await fetchWithRetry(url);
   const text = await res.text();
   const data = JSON.parse(text);
   const entries = normalizeEntries(data.feed?.entry) as LegacyEntry[];
@@ -106,10 +150,7 @@ async function fetchFallback({
 }): Promise<ChartEntry[]> {
   const chartPath = CHART_MAP_FALLBACK[chart] || CHART_MAP_FALLBACK["top-free"];
   const url = `https://rss.applemarketingtools.com/api/v2/${country}/apps/${chartPath}/${limit}/apps.json`;
-  const res = await fetch(url, { next: { revalidate: 1800 } });
-  if (!res.ok) {
-    throw new Error(`Apple fallback error: ${res.status}`);
-  }
+  const res = await fetchWithRetry(url);
   const data = await res.json();
   const results = (data.feed?.results ?? []) as FallbackResult[];
   return results.map((app, idx) => ({
@@ -139,7 +180,12 @@ export async function fetchTopCharts({
     return apps;
   } catch (err) {
     if (genreId) {
-      throw err;
+      // Legacy iTunes RSS (nguồn duy nhất hỗ trợ genre) đang bị Apple chặn (403).
+      // Marketing Tools không hỗ trợ genre → không thể fallback → trả lỗi rõ ràng
+      // thay vì trả về chart overall bị gán nhãn sai thể loại.
+      throw new Error(
+        `Category chart unavailable: legacy RSS bị Apple chặn (${(err as Error).message})`
+      );
     }
     try {
       return await fetchFallback({ country, chart, limit: safeLimit });
@@ -173,10 +219,7 @@ export async function lookupApps(ids: string[], country = "us"): Promise<LookupA
   for (let i = 0; i < uniqueIds.length; i += BATCH) {
     const chunk = uniqueIds.slice(i, i + BATCH);
     const url = `https://itunes.apple.com/lookup?id=${chunk.join(",")}&country=${country}`;
-    const res = await fetch(url);
-    if (!res.ok) {
-      throw new Error(`iTunes lookup error: ${res.status}`);
-    }
+    const res = await fetchWithRetry(url);
     const data = await res.json();
     for (const result of data.results ?? []) {
       if (result.kind === "software" || result.wrapperType === "software") {
@@ -221,7 +264,7 @@ export async function lookupApp(id: string): Promise<LookupApp | null> {
   // If still missing rating, try global lookup without country parameter
   if (!app || !app.averageUserRating || app.userRatingCount === 0) {
     try {
-      const res = await fetch(`https://itunes.apple.com/lookup?id=${id}`);
+      const res = await fetchWithRetry(`https://itunes.apple.com/lookup?id=${id}`);
       if (res.ok) {
         const data = await res.json();
         const raw = data.results?.[0];
@@ -250,10 +293,7 @@ export async function searchApps(term: string, country = "us"): Promise<LookupAp
   const url = `https://itunes.apple.com/search?term=${encodeURIComponent(
     term
   )}&country=${country}&entity=software&limit=25`;
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error(`iTunes search error: ${res.status}`);
-  }
+  const res = await fetchWithRetry(url);
   const data = await res.json();
   return (data.results ?? []).map(mapLookup);
 }
@@ -274,23 +314,29 @@ export function chartPathFor(chart: ChartType): string {
 export interface DiscoveredRank {
   country_code: string;
   chart_type: ChartType;
+  category_id?: number | null;
   rank: number;
 }
 
 /**
- * Fetch overall top chart (không filter genre) cho 1 quốc gia.
- * Nguồn chính: Apple Marketing Tools RSS (chỉ hỗ trợ top-free/top-paid),
- * fallback: legacy iTunes RSS.
+ * Fetch top chart cho 1 quốc gia.
+ * Nguồn chính: Apple Marketing Tools RSS (limit max 100, chỉ hỗ trợ overall top-free/top-paid),
+ * fallback / genre: legacy iTunes RSS.
  */
 export async function fetchOverallChart(
   country: string,
   chart: ChartType,
+  genreId?: number | null,
   limit = 100
 ): Promise<ChartEntry[]> {
+  if (genreId) {
+    return fetchTopCharts({ country, chart, genreId, limit });
+  }
   const chartPath = CHART_MAP_FALLBACK[chart];
   if (chartPath) {
     try {
-      const url = `https://rss.applemarketingtools.com/api/v2/${country}/apps/${chartPath}/${limit}/apps.json`;
+      const safeLimit = Math.min(limit, 100);
+      const url = `https://rss.applemarketingtools.com/api/v2/${country}/apps/${chartPath}/${safeLimit}/apps.json`;
       const res = await fetch(url, { next: { revalidate: 1800 } });
       if (!res.ok) throw new Error(`Apple Marketing Tools error: ${res.status}`);
       const data = await res.json();
@@ -311,24 +357,31 @@ export async function fetchOverallChart(
 }
 
 /**
- * Quét rank của 1 app trên tất cả các nước × 2 chart (top-free, top-paid),
- * luôn dùng chart OVERALL (không filter genre). Kết quả sort tăng dần theo rank.
- * Chạy song song có giới hạn + delay giữa các batch để tránh bị Apple rate-limit.
+ * Quét rank của 1 app trên tất cả các nước × các chart (Overall + Primary Category),
+ * lấy cả vị trí trên bảng xếp hạng Thể loại chính của App (ví dụ: Entertainment, Games, Productivity...).
  */
 export async function discoverRanksAcrossCountries({
   appleId,
+  genreId,
   countries = SCAN_COUNTRY_CODES,
   concurrency = 10,
 }: {
   appleId: string;
+  genreId?: number | null;
   countries?: string[];
   concurrency?: number;
 }): Promise<DiscoveredRank[]> {
-  const charts: ChartType[] = ["top-free", "top-paid"];
-  const tasks: Array<{ country: string; chart: ChartType }> = [];
+  const charts: ChartType[] = ["top-free", "top-paid", "top-grossing"];
+  const tasks: Array<{ country: string; chart: ChartType; genreId?: number | null }> = [];
+
   for (const c of countries) {
     for (const ch of charts) {
+      // Overall chart
       tasks.push({ country: c, chart: ch });
+      // Primary category chart (nếu app có genreId)
+      if (genreId) {
+        tasks.push({ country: c, chart: ch, genreId });
+      }
     }
   }
 
@@ -338,7 +391,7 @@ export async function discoverRanksAcrossCountries({
     const batch = tasks.slice(i, i + concurrency);
     i += concurrency;
     const settled = await Promise.allSettled(
-      batch.map((t) => fetchOverallChart(t.country, t.chart, 100))
+      batch.map((t) => fetchOverallChart(t.country, t.chart, t.genreId, 100))
     );
     for (let j = 0; j < batch.length; j++) {
       const t = batch[j];
@@ -346,10 +399,15 @@ export async function discoverRanksAcrossCountries({
       if (res.status !== "fulfilled") continue;
       const entry = res.value.find((e) => String(e.id) === String(appleId));
       if (entry) {
-        results.push({ country_code: t.country, chart_type: t.chart, rank: entry.rank });
+        results.push({
+          country_code: t.country,
+          chart_type: t.chart,
+          category_id: t.genreId ?? null,
+          rank: entry.rank,
+        });
       }
     }
-    if (i < tasks.length) await sleep(150);
+    if (i < tasks.length) await sleep(120);
   }
 
   results.sort((a, b) => a.rank - b.rank);

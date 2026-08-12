@@ -1,0 +1,117 @@
+import { NextRequest, NextResponse } from "next/server";
+import { createDbClient, getLatestOverallRanks } from "@/lib/supabase/db";
+import { discoverRanksAcrossCountries } from "@/lib/apple";
+import { PRIORITY_SCAN_COUNTRIES, SCAN_COUNTRY_CODES } from "@/lib/constants";
+
+export const dynamic = "force-dynamic";
+// Cho phép request chạy lâu hơn (Vercel: tối đa 60s trên Hobby, 300s Pro)
+export const maxDuration = 60;
+
+type RouteContext = { params: Promise<{ id: string }> };
+
+/**
+ * POST /api/apps/[id]/discover
+ * Chạy rank discovery cho app (bằng apple_id, không phải DB id).
+ * Body: { apple_id: string, force?: boolean, full?: boolean }
+ *
+ * - Nếu data đã fresh (< 6h) và force !== true → trả về ngay, không quét lại.
+ * - full=false (default): quét PRIORITY_SCAN_COUNTRIES (24 nước) — nhanh, dùng khi load trang.
+ * - full=true: quét SCAN_COUNTRY_CODES (~160 nước) — đầy đủ, dùng khi cần sync toàn bộ.
+ * - Lưu kết quả vào rank_snapshots.
+ * - Trả về số rank mới tìm thấy.
+ */
+export async function POST(request: NextRequest, context: RouteContext) {
+  const { id } = await context.params;
+  const supabase = createDbClient();
+
+  let body: { apple_id?: string; force?: boolean; full?: boolean } = {};
+  try {
+    body = await request.json();
+  } catch {
+    // body optional
+  }
+
+  const { apple_id, force = false, full = false } = body;
+
+  if (!apple_id) {
+    return NextResponse.json({ error: "apple_id required" }, { status: 400 });
+  }
+
+  // Check staleness: nếu data còn fresh và không force → skip
+  const STALE_MS = 6 * 3600 * 1000;
+  const currentRanks = await getLatestOverallRanks(supabase, id);
+  const latestCaptured = currentRanks.reduce(
+    (max, r) =>
+      r.captured_at ? Math.max(max, new Date(r.captured_at).getTime()) : max,
+    0
+  );
+  const isFresh = currentRanks.length >= 4 && Date.now() - latestCaptured < STALE_MS;
+
+  if (isFresh && !force) {
+    return NextResponse.json({
+      ok: true,
+      skipped: true,
+      message: "Data is fresh, skipped discovery",
+      rank_count: currentRanks.length,
+    });
+  }
+
+  // Chọn danh sách nước cần quét:
+  // - full=true → tất cả ~160 nước (chậm hơn, đầy đủ hơn)
+  // - full=false → chỉ 24 nước ưu tiên (nhanh cho lần đầu load trang)
+  const countriesToScan = full ? SCAN_COUNTRY_CODES : PRIORITY_SCAN_COUNTRIES;
+
+  // Lấy primary_category_id của app từ DB
+  const { data: appRow } = await supabase
+    .from("apps")
+    .select("primary_category_id")
+    .eq("id", id)
+    .maybeSingle();
+  const genreId = appRow?.primary_category_id ?? null;
+
+  // Chạy discovery (quét cả overall lẫn category chart của app)
+  let discovered: Awaited<ReturnType<typeof discoverRanksAcrossCountries>> = [];
+  try {
+    discovered = await discoverRanksAcrossCountries({
+      appleId: apple_id,
+      genreId,
+      countries: countriesToScan,
+      concurrency: full ? 8 : 5, // full scan dùng concurrency cao hơn chút
+    });
+  } catch (err) {
+    console.error("[discover] discoverRanksAcrossCountries error:", err);
+    return NextResponse.json(
+      { error: "Discovery failed", detail: (err as Error).message },
+      { status: 500 }
+    );
+  }
+
+  // Lưu vào DB
+  if (discovered.length > 0) {
+    const snapshotsToInsert = discovered.map((d) => ({
+      app_id: id,
+      country_code: d.country_code,
+      category_id: d.category_id ?? null,
+      chart_type: d.chart_type,
+      rank: d.rank,
+    }));
+
+    for (let i = 0; i < snapshotsToInsert.length; i += 500) {
+      const { error } = await supabase
+        .from("rank_snapshots")
+        .insert(snapshotsToInsert.slice(i, i + 500));
+      if (error) {
+        console.error("[discover] insert error:", error.message);
+      }
+    }
+  }
+
+  return NextResponse.json({
+    ok: true,
+    skipped: false,
+    full_scan: full,
+    countries_scanned: countriesToScan.length,
+    rank_count: discovered.length,
+    countries_found: [...new Set(discovered.map((d) => d.country_code))],
+  });
+}

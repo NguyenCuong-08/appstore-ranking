@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/select";
 import { CHARTS, CHART_LABELS } from "@/lib/constants";
 import type { ChartType } from "@/lib/types";
+import { CountryFlag } from "@/components/country-flag";
 
 interface HistoryRow {
   captured_at: string;
@@ -38,15 +39,6 @@ const LINE_COLORS = [
   "#f97316",
   "#84cc16",
 ];
-
-// Country flag from ISO code
-function countryFlag(code: string) {
-  const codePoints = code
-    .toUpperCase()
-    .split("")
-    .map((c) => 127397 + c.charCodeAt(0));
-  return String.fromCodePoint(...codePoints);
-}
 
 export function RankHistoryChart({
   appId,
@@ -232,13 +224,23 @@ export function RankHistoryChart({
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 formatter={(value: unknown, name: any) => [
                   `#${value}`,
-                  name ? `${countryFlag(String(name))} ${String(name).toUpperCase()}` : "",
+                  name ? (
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: "0.375rem" }}>
+                      <CountryFlag code={String(name)} width={16} height={11} />
+                      {String(name).toUpperCase()}
+                    </span>
+                  ) : (
+                    ""
+                  ),
                 ]}
               />
               <Legend
-                formatter={(value: string) =>
-                  `${countryFlag(value)} ${value.toUpperCase()}`
-                }
+                formatter={(value: string) => (
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: "0.25rem" }}>
+                    <CountryFlag code={value} width={16} height={11} />
+                    {value.toUpperCase()}
+                  </span>
+                )}
                 wrapperStyle={{
                   fontSize: "0.8rem",
                   color: "oklch(0.65 0.01 250)",

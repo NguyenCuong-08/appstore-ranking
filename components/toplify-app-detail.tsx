@@ -1,13 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { countryName } from "@/lib/constants";
-import { RankHistoryChart } from "@/components/rank-history-chart";
 import { CountryPicker } from "@/components/country-picker";
-import { AlertManager } from "@/components/alert-manager";
+import { CountryFlag } from "@/components/country-flag";
 import { TrackButton } from "@/components/track-button";
 import { UntrackButton } from "@/components/untrack-button";
+// import { RankHistoryChart } from "@/components/rank-history-chart";
+// import { AlertManager } from "@/components/alert-manager";
 
 interface AppDetailProps {
   app: {
@@ -26,18 +27,15 @@ interface AppDetailProps {
     code: string;
     free: number | null;
     paid: number | null;
+    grossing: number | null;
     best: number | null;
+    /** dương = tăng hạng, âm = tụt hạng, null = chưa có lịch sử */
+    rankChange: number | null;
   }>;
   score: number | null;
   countriesInTop: number;
-}
-
-function countryFlag(code: string) {
-  const codePoints = code
-    .toUpperCase()
-    .split("")
-    .map((c) => 127397 + c.charCodeAt(0));
-  return String.fromCodePoint(...codePoints);
+  /** Nếu true, client sẽ tự động gọi discover API rồi refresh trang để hiện rank mới. */
+  needsDiscovery?: boolean;
 }
 
 function formatNumber(n: number): string {
@@ -112,15 +110,61 @@ export function ToplifyAppDetail({
   countryRanks,
   score,
   countriesInTop,
+  needsDiscovery = false,
 }: AppDetailProps) {
   const router = useRouter();
-  const [sortAsc, setSortAsc] = useState<boolean>(true);
+  // sortMode:
+  //   "rank"    — sắp xếp theo best rank tăng dần (mặc định, rank 1 đứng đầu)
+  //   "gainers" — sắp xếp theo tăng hạng nhiều nhất (leo nhiều bậc nhất đứng đầu)
+  //   "losers"  — sắp xếp theo tụt hạng nhiều nhất (rớt nhiều bậc nhất đứng đầu)
+  const [sortMode, setSortMode] = useState<"rank" | "gainers" | "losers">("rank");
   const [filterPinnedOnly, setFilterPinnedOnly] = useState<boolean>(false);
   const [showPicker, setShowPicker] = useState<boolean>(false);
   const [showHistoryChart, setShowHistoryChart] = useState<boolean>(true);
   const [showMenu, setShowMenu] = useState<boolean>(false);
+  const [page, setPage] = useState<number>(0);
+  const [discovering, setDiscovering] = useState<boolean>(false);
+  const PAGE_SIZE = 15;
 
-  // Filter and sort country ranks
+  // Auto-trigger rank discovery 2 pha:
+  // Pha 1 (quick): quét 24 nước ưu tiên → refresh trang nhanh để show data sớm.
+  // Pha 2 (full):  quét toàn bộ ~160 nước → refresh lần 2 để show đầy đủ như Toplify app.
+  const runDiscovery = useCallback(async () => {
+    if (!needsDiscovery) return;
+    setDiscovering(true);
+    try {
+      // Pha 1: Quick scan (24 priority countries)
+      const res1 = await fetch(`/api/apps/${app.id}/discover`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apple_id: app.apple_id, full: false }),
+      });
+      if (res1.ok) {
+        router.refresh(); // Hiện data priority countries trước
+      }
+
+      // Pha 2: Full scan tất cả ~160 nước (chạy tiếp, không block UI)
+      const res2 = await fetch(`/api/apps/${app.id}/discover`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apple_id: app.apple_id, full: true, force: true }),
+      });
+      if (res2.ok) {
+        router.refresh(); // Cập nhật đầy đủ toàn bộ countries
+      }
+    } catch (err) {
+      console.error("[discover] error:", err);
+    } finally {
+      setDiscovering(false);
+    }
+  }, [needsDiscovery, app.id, app.apple_id, router]);
+
+  useEffect(() => {
+    runDiscovery();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Filter và sort country ranks
   let displayedCountries = countryRanks.filter((r) => r.best !== null);
   if (filterPinnedOnly && pinnedCountries.length > 0) {
     displayedCountries = displayedCountries.filter((r) =>
@@ -128,13 +172,30 @@ export function ToplifyAppDetail({
     );
   }
 
-  displayedCountries.sort((a, b) => {
-    const rankA = a.best ?? 999;
-    const rankB = b.best ?? 999;
-    if (rankA === rankB)
-      return countryName(a.code).localeCompare(countryName(b.code));
-    return sortAsc ? rankA - rankB : rankB - rankA;
+  displayedCountries = [...displayedCountries].sort((a, b) => {
+    if (sortMode === "rank") {
+      // Sắp xếp theo best rank tăng dần (rank 1 đứng đầu)
+      return (a.best ?? 999) - (b.best ?? 999) ||
+        countryName(a.code).localeCompare(countryName(b.code));
+    }
+    if (sortMode === "gainers") {
+      // Tăng hạng nhiều nhất đứng đầu (rankChange lớn nhất = leo nhiều bậc nhất)
+      const ca = a.rankChange ?? -Infinity;
+      const cb = b.rankChange ?? -Infinity;
+      return cb - ca || (a.best ?? 999) - (b.best ?? 999);
+    }
+    // losers: tụt hạng nhiều nhất đứng đầu (rankChange âm nhiều nhất)
+    const ca = a.rankChange ?? Infinity;
+    const cb = b.rankChange ?? Infinity;
+    return ca - cb || (a.best ?? 999) - (b.best ?? 999);
   });
+
+  const totalPages = Math.max(1, Math.ceil(displayedCountries.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages - 1);
+  const pageCountries = displayedCountries.slice(
+    safePage * PAGE_SIZE,
+    safePage * PAGE_SIZE + PAGE_SIZE
+  );
 
   return (
     <div
@@ -147,6 +208,38 @@ export function ToplifyAppDetail({
         paddingBottom: "4rem",
       }}
     >
+      {/* Discovery loading banner */}
+      {discovering && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "0.5rem",
+            background: "#1c1c1e",
+            border: "1px solid #2c2c2e",
+            borderRadius: "0.75rem",
+            padding: "0.6rem 1rem",
+            fontSize: "0.8rem",
+            color: "#aeaeb2",
+          }}
+        >
+          <span
+            style={{
+              width: "12px",
+              height: "12px",
+              borderRadius: "50%",
+              border: "2px solid #aeaeb2",
+              borderTopColor: "#ffffff",
+              display: "inline-block",
+              animation: "spin 0.8s linear infinite",
+              flexShrink: 0,
+            }}
+          />
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+          Đang quét xếp hạng App Store… Trang sẽ tự cập nhật khi xong.
+        </div>
+      )}
+
       {/* 1. Top Navigation Bar with Back & Menu */}
       <div
         style={{
@@ -512,8 +605,8 @@ export function ToplifyAppDetail({
         <CountryPicker appId={app.id} initialPinned={pinnedCountries} />
       )}
 
-      {/* Optional Ranking History Chart */}
-      {showHistoryChart && (
+      {/* Optional Ranking History Chart (tạm ẩn) */}
+      {/* {showHistoryChart && (
         <div
           style={{
             background: "#1c1c1e",
@@ -534,7 +627,7 @@ export function ToplifyAppDetail({
           </div>
           <RankHistoryChart appId={app.id} pinnedCountries={pinnedCountries} />
         </div>
-      )}
+      )} */}
 
       {/* 5. TOP RANKING Section Header & Sort Pill Controls */}
       <div
@@ -562,7 +655,7 @@ export function ToplifyAppDetail({
           </div>
         </div>
 
-        {/* Filter / Sort Control Pill */}
+        {/* Sort Control Pill */}
         <div
           style={{
             background: "#2c2c2e",
@@ -573,57 +666,63 @@ export function ToplifyAppDetail({
             gap: "2px",
           }}
         >
+          {/* Rank: sắp xếp theo rank tăng dần */}
           <button
-            onClick={() => setSortAsc(true)}
+            onClick={() => { setSortMode("rank"); setPage(0); }}
             style={{
-              background: sortAsc ? "#3a3a3c" : "transparent",
-              color: "#ffffff",
+              background: sortMode === "rank" ? "#3a3a3c" : "transparent",
+              color: sortMode === "rank" ? "#ffffff" : "#8e8e93",
               border: "none",
               borderRadius: "999px",
               padding: "0.25rem 0.625rem",
               fontSize: "0.75rem",
               fontWeight: 600,
               cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: "0.25rem",
             }}
+            title="Sắp xếp theo rank"
           >
-            <span>≡ Rank</span>
+            ≡ Rank
           </button>
+          {/* ↑ Gainers: leo hạng nhiều nhất đứng đầu */}
           <button
-            onClick={() => setSortAsc(true)}
+            onClick={() => { setSortMode("gainers"); setPage(0); }}
             style={{
-              background: sortAsc ? "#3a3a3c" : "transparent",
-              color: sortAsc ? "#30d158" : "#8e8e93",
+              background: sortMode === "gainers" ? "#3a3a3c" : "transparent",
+              color: sortMode === "gainers" ? "#30d158" : "#8e8e93",
               border: "none",
               borderRadius: "999px",
               padding: "0.25rem 0.5rem",
-              fontSize: "0.75rem",
+              fontSize: "0.875rem",
               cursor: "pointer",
+              fontWeight: 700,
             }}
-            title="Sort Ascending"
+            title="Tăng hạng nhiều nhất"
           >
             ↑
           </button>
+          {/* ↓ Losers: tụt hạng nhiều nhất đứng đầu */}
           <button
-            onClick={() => setSortAsc(false)}
+            onClick={() => { setSortMode("losers"); setPage(0); }}
             style={{
-              background: !sortAsc ? "#3a3a3c" : "transparent",
-              color: !sortAsc ? "#30d158" : "#8e8e93",
+              background: sortMode === "losers" ? "#3a3a3c" : "transparent",
+              color: sortMode === "losers" ? "#ff453a" : "#8e8e93",
               border: "none",
               borderRadius: "999px",
               padding: "0.25rem 0.5rem",
-              fontSize: "0.75rem",
+              fontSize: "0.875rem",
               cursor: "pointer",
+              fontWeight: 700,
             }}
-            title="Sort Descending"
+            title="Tụt hạng nhiều nhất"
           >
             ↓
           </button>
           {pinnedCountries.length > 0 && (
             <button
-              onClick={() => setFilterPinnedOnly((v) => !v)}
+              onClick={() => {
+                setFilterPinnedOnly((v) => !v);
+                setPage(0);
+              }}
               style={{
                 background: filterPinnedOnly ? "#30d158" : "transparent",
                 color: filterPinnedOnly ? "#000000" : "#8e8e93",
@@ -651,7 +750,7 @@ export function ToplifyAppDetail({
           flexDirection: "column",
         }}
       >
-        {displayedCountries.map((r, idx) => (
+        {pageCountries.map((r, idx) => (
           <div
             key={r.code}
             style={{
@@ -660,7 +759,7 @@ export function ToplifyAppDetail({
               justifyContent: "space-between",
               padding: "0.875rem 0.625rem",
               borderBottom:
-                idx < displayedCountries.length - 1
+                idx < pageCountries.length - 1
                   ? "1px solid #2c2c2e"
                   : "none",
             }}
@@ -668,7 +767,7 @@ export function ToplifyAppDetail({
             {/* Country Flag & Name */}
             <div style={{ display: "flex", alignItems: "center", gap: "0.875rem" }}>
               <span style={{ fontSize: "1.5rem", lineHeight: 1 }}>
-                {countryFlag(r.code)}
+                <CountryFlag code={r.code} width={26} height={18} />
               </span>
               <span
                 style={{
@@ -681,20 +780,38 @@ export function ToplifyAppDetail({
               </span>
             </div>
 
-            {/* Rank Pill Badge */}
-            <div
-              style={{
-                background: "#2c2c2e",
-                borderRadius: "999px",
-                padding: "0.25rem 0.875rem",
-                fontSize: "0.875rem",
-                fontWeight: 600,
-                color: r.best && r.best <= 3 ? "#ffcc00" : "#ffffff",
-                minWidth: "2.25rem",
-                textAlign: "center",
-              }}
-            >
-              {r.best ?? "—"}
+            {/* Rank change + Best rank pill — layout giống Toplify */}
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+              {/* ↑N / ↓N badge — luôn hiện khi có data lịch sử */}
+              {r.rankChange !== null && r.rankChange !== 0 && (
+                <span
+                  style={{
+                    fontSize: "0.8125rem",
+                    fontWeight: 700,
+                    color: r.rankChange > 0 ? "#30d158" : "#ff453a",
+                    letterSpacing: "-0.01em",
+                    minWidth: "2rem",
+                    textAlign: "right",
+                  }}
+                >
+                  {r.rankChange > 0 ? `↑ ${r.rankChange}` : `↓ ${Math.abs(r.rankChange)}`}
+                </span>
+              )}
+              {/* Best rank pill */}
+              <div
+                style={{
+                  background: "#2c2c2e",
+                  borderRadius: "0.625rem",
+                  padding: "0.3rem 0.875rem",
+                  fontSize: "0.9375rem",
+                  fontWeight: 700,
+                  color: r.best && r.best <= 3 ? "#ffcc00" : "#ffffff",
+                  minWidth: "2.5rem",
+                  textAlign: "center",
+                }}
+              >
+                {r.best ?? "—"}
+              </div>
             </div>
           </div>
         ))}
@@ -711,9 +828,65 @@ export function ToplifyAppDetail({
             No country rankings found
           </div>
         )}
+
+        {totalPages > 1 && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "0.5rem",
+              padding: "0.75rem 0.5rem",
+            }}
+          >
+            <button
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              disabled={safePage === 0}
+              style={{
+                background: "#2c2c2e",
+                color: "#ffffff",
+                border: "none",
+                borderRadius: "999px",
+                padding: "0.375rem 0.875rem",
+                fontSize: "0.8125rem",
+                cursor: safePage === 0 ? "not-allowed" : "pointer",
+                opacity: safePage === 0 ? 0.4 : 1,
+              }}
+            >
+              Prev
+            </button>
+            <span
+              style={{
+                fontSize: "0.8125rem",
+                color: "#8e8e93",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {safePage + 1} / {totalPages}
+            </span>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+              disabled={safePage === totalPages - 1}
+              style={{
+                background: "#2c2c2e",
+                color: "#ffffff",
+                border: "none",
+                borderRadius: "999px",
+                padding: "0.375rem 0.875rem",
+                fontSize: "0.8125rem",
+                cursor:
+                  safePage === totalPages - 1 ? "not-allowed" : "pointer",
+                opacity: safePage === totalPages - 1 ? 0.4 : 1,
+              }}
+            >
+              Next
+            </button>
+          </div>
+        )}
       </div>
 
-      {tracking && <AlertManager appId={app.id} />}
+      {/* Rank Alerts (tạm ẩn) */}
+      {/* {tracking && <AlertManager appId={app.id} />} */}
     </div>
   );
 }

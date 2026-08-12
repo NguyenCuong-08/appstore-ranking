@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createDbClient } from "@/lib/supabase/db";
-import { lookupApp, extractAppleId } from "@/lib/apple";
-import { DEFAULT_PINNED_COUNTRIES } from "@/lib/constants";
+import { lookupApp, extractAppleId, discoverRanksAcrossCountries } from "@/lib/apple";
+import { DEFAULT_PINNED_COUNTRIES, SCAN_COUNTRY_CODES } from "@/lib/constants";
 
 export const dynamic = "force-dynamic";
 
@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
 
   let app = existing;
 
-  // Always perform lookup if app doesn't exist or if metadata is incomplete/stale
+  // Luôn lookup metadata đầy đủ khi add app lần đầu hoặc metadata còn thiếu
   const needsLookup =
     !app ||
     app.rating === null ||
@@ -90,6 +90,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "App not found on App Store" }, { status: 404 });
   }
 
+  // Track app (upsert để idempotent)
   const { error: trackErr } = await supabase.from("tracked_apps").upsert(
     {
       app_id: app.id,
@@ -104,6 +105,38 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+
+  // Trả về response ngay — không block người dùng chờ discovery
+  // Discovery full scan chạy background (fire-and-forget)
+  const appSnapshot = app; // capture để dùng trong closure
+  void (async () => {
+    try {
+      const discovered = await discoverRanksAcrossCountries({
+        appleId: appSnapshot.apple_id,
+        countries: SCAN_COUNTRY_CODES, // Quét toàn bộ ~160 nước ngay khi add
+        concurrency: 8,
+      });
+
+      if (discovered.length > 0) {
+        const snapshots = discovered.map((d) => ({
+          app_id: appSnapshot.id,
+          country_code: d.country_code,
+          category_id: null,
+          chart_type: d.chart_type,
+          rank: d.rank,
+        }));
+
+        for (let i = 0; i < snapshots.length; i += 500) {
+          await supabase.from("rank_snapshots").insert(snapshots.slice(i, i + 500));
+        }
+        console.log(
+          `[add-app] Discovery complete: ${appSnapshot.apple_id} found in ${discovered.length} charts`
+        );
+      }
+    } catch (err) {
+      console.error("[add-app] Background discovery failed:", err);
+    }
+  })();
 
   return NextResponse.json({ app, tracked: true });
 }

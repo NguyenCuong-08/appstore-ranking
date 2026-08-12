@@ -170,6 +170,19 @@ export const SCAN_COUNTRY_CODES = COUNTRY_CODES.filter(
   (c) => !COUNTRY_CODES_EXCLUDED.includes(c)
 );
 
+// Những nước scan ưu tiên khi live-scan 1 app (trang chi tiết) để không phải
+// gọi ~334 request một lúc (count*2 charts) dễ bị Apple throttle → mất dữ liệu,
+// trang bị treo. Toàn bộ danh sách country vẫn được cron sync-ranks xử lý đủ.
+export const PRIORITY_SCAN_COUNTRIES: string[] = [
+  "us", "vn", "jp", "kr",
+  "gb", "de", "fr", "ca",
+  "au", "cn", "hk", "sg",
+  "tw", "th", "id", "my",
+  "ph", "in", "br", "mx",
+  "ru", "it", "es", "nl",
+  "pt",
+];
+
 export const COUNTRIES = COUNTRY_CODES.map((code) => ({
   code,
   name: COUNTRY_NAMES[code],

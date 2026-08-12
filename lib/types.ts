@@ -81,6 +81,7 @@ export interface LatestRank {
   country_code: string;
   chart_type: ChartType;
   rank: number | null;
+  prev_rank: number | null; // Rank trước đó để tính thay đổi
   captured_at: string | null;
 }
 
