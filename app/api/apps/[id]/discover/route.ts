@@ -69,49 +69,70 @@ export async function POST(request: NextRequest, context: RouteContext) {
     .maybeSingle();
   const genreId = appRow?.primary_category_id ?? null;
 
-  // Chạy discovery (quét cả overall lẫn category chart của app)
-  let discovered: Awaited<ReturnType<typeof discoverRanksAcrossCountries>> = [];
+  // Pha 1: Quét nhanh các nước ưu tiên (PRIORITY_SCAN_COUNTRIES) trong ~0.3s
+  let priorityDiscovered: Awaited<ReturnType<typeof discoverRanksAcrossCountries>> = [];
   try {
-    discovered = await discoverRanksAcrossCountries({
+    priorityDiscovered = await discoverRanksAcrossCountries({
       appleId: apple_id,
       genreId,
-      countries: countriesToScan,
-      concurrency: full ? 8 : 5, // full scan dùng concurrency cao hơn chút
+      countries: PRIORITY_SCAN_COUNTRIES,
+      concurrency: 35,
     });
   } catch (err) {
-    console.error("[discover] discoverRanksAcrossCountries error:", err);
-    return NextResponse.json(
-      { error: "Discovery failed", detail: (err as Error).message },
-      { status: 500 }
-    );
+    console.error("[discover] Priority scan error:", err);
   }
 
-  // Lưu vào DB
-  if (discovered.length > 0) {
-    const snapshotsToInsert = discovered.map((d) => ({
+  // Lưu kết quả pha 1 vào DB
+  if (priorityDiscovered.length > 0) {
+    const snapshotsToInsert = priorityDiscovered.map((d) => ({
       app_id: id,
       country_code: d.country_code,
       category_id: d.category_id ?? null,
       chart_type: d.chart_type,
       rank: d.rank,
     }));
-
     for (let i = 0; i < snapshotsToInsert.length; i += 500) {
-      const { error } = await supabase
-        .from("rank_snapshots")
-        .insert(snapshotsToInsert.slice(i, i + 500));
-      if (error) {
-        console.error("[discover] insert error:", error.message);
-      }
+      await supabase.from("rank_snapshots").insert(snapshotsToInsert.slice(i, i + 500));
     }
   }
 
+  // Pha 2: Quét nốt toàn bộ các nước còn lại (SCAN_COUNTRY_CODES) dưới dạng background task
+  const remainingCountries = SCAN_COUNTRY_CODES.filter(
+    (c) => !PRIORITY_SCAN_COUNTRIES.includes(c)
+  );
+
+  if (remainingCountries.length > 0) {
+    void (async () => {
+      try {
+        const fullDiscovered = await discoverRanksAcrossCountries({
+          appleId: apple_id,
+          genreId,
+          countries: remainingCountries,
+          concurrency: 35,
+        });
+        if (fullDiscovered.length > 0) {
+          const snapshotsToInsert = fullDiscovered.map((d) => ({
+            app_id: id,
+            country_code: d.country_code,
+            category_id: d.category_id ?? null,
+            chart_type: d.chart_type,
+            rank: d.rank,
+          }));
+          for (let i = 0; i < snapshotsToInsert.length; i += 500) {
+            await supabase.from("rank_snapshots").insert(snapshotsToInsert.slice(i, i + 500));
+          }
+        }
+      } catch (err) {
+        console.error("[discover] Background full scan error:", err);
+      }
+    })();
+  }
+
+  // Trả về 200 OK ngay lập tức (< 0.5s) để không bao giờ bị 504 Gateway Timeout trên Vercel
   return NextResponse.json({
     ok: true,
     skipped: false,
-    full_scan: full,
-    countries_scanned: countriesToScan.length,
-    rank_count: discovered.length,
-    countries_found: [...new Set(discovered.map((d) => d.country_code))],
+    priority_count: priorityDiscovered.length,
+    message: "Discovery initialized successfully",
   });
 }
